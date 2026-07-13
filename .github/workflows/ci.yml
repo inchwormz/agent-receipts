@@ -46,7 +46,11 @@ jobs:
         shell: bash
         run: |
           cargo build --quiet --manifest-path receipts-compiler/Cargo.toml
-          echo "$PWD/receipts-compiler/target/debug" >> "$GITHUB_PATH"
+          # GITHUB_PATH needs a NATIVE path: bash's $PWD on the Windows
+          # runner is /d/a/... which Windows process lookup cannot use.
+          bindir="$PWD/receipts-compiler/target/debug"
+          if command -v cygpath >/dev/null 2>&1; then bindir="$(cygpath -w "$bindir")"; fi
+          echo "$bindir" >> "$GITHUB_PATH"
 
       - name: node --test
         run: node --test tests/packet_shape_integrity.test.js tests/m0_trust_semantics.test.js tests/forgiving_ingest.test.js tests/receipts_attestation.test.js tests/worklist_resolutions.test.js tests/prime_brief.test.js tests/loop_composites.test.js
