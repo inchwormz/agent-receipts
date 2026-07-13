@@ -4,7 +4,9 @@ use crate::compiler::checks::load_verified_attempts;
 use crate::compiler::crypto::current_executor_identity;
 use crate::compiler::run_dir::{RunManifest, compile_run_dir};
 use crate::compiler::session::{SessionCapture, latest_session};
-use crate::compiler::signed_journal::{SignedJournalRecord, append_signed_record};
+use crate::compiler::signed_journal::{
+    SignedJournalRecord, append_signed_record, load_verified_signed_records,
+};
 use crate::schema::{CheckHistory, NextPassPacket};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -76,11 +78,19 @@ pub struct IndependentOutcome {
     pub citations: Vec<OutcomeCitation>,
     pub model: OutcomeModelIdentity,
     pub task_family: String,
+    #[serde(default = "unknown_value")]
+    pub repository_id: String,
     pub language: String,
+    #[serde(default = "unknown_value")]
+    pub freshness: String,
     pub change_size: ChangeSize,
     pub check_strength: String,
     pub environment_match: String,
     pub retry_history: Vec<CheckHistory>,
+}
+
+fn unknown_value() -> String {
+    "unknown".to_string()
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, Box<dyn std::error::Error>> {
@@ -202,6 +212,93 @@ fn change_size(repo_root: &Path) -> ChangeSize {
         }
     }
     size
+}
+
+fn repository_id(repo_root: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo_root.to_string_lossy().as_ref(),
+            "rev-list",
+            "--max-parents=0",
+            "--reverse",
+            "HEAD",
+        ])
+        .output();
+    if let Ok(output) = output {
+        if output.status.success() {
+            if let Some(root) = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .find(|line| line.len() == 40 && line.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            {
+                return format!("git-root:{}", root.to_ascii_lowercase());
+            }
+        }
+    }
+    format!(
+        "local:{}",
+        blake3::hash(repo_root.to_string_lossy().as_bytes()).to_hex()
+    )
+}
+
+fn language(repo_root: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            repo_root.to_string_lossy().as_ref(),
+            "diff",
+            "--name-only",
+            "HEAD",
+        ])
+        .output();
+    let Ok(output) = output else {
+        return "unknown".to_string();
+    };
+    if !output.status.success() {
+        return "unknown".to_string();
+    }
+    let mut languages = BTreeSet::new();
+    for path in String::from_utf8_lossy(&output.stdout).lines() {
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let name = match extension.as_str() {
+            "rs" => "rust",
+            "js" | "mjs" | "cjs" => "javascript",
+            "ts" | "tsx" => "typescript",
+            "py" => "python",
+            "go" => "go",
+            "java" => "java",
+            "rb" => "ruby",
+            "cs" => "csharp",
+            "cpp" | "cc" | "cxx" | "h" | "hpp" => "cpp",
+            _ => continue,
+        };
+        languages.insert(name);
+    }
+    if languages.is_empty() {
+        "unknown".to_string()
+    } else {
+        languages.into_iter().collect::<Vec<_>>().join("+")
+    }
+}
+
+fn freshness(packet: &NextPassPacket) -> String {
+    if packet.trust_assessments.is_empty() {
+        return "unknown".to_string();
+    }
+    for state in ["stale", "environment_mismatch", "unbound", "unknown"] {
+        if packet
+            .trust_assessments
+            .iter()
+            .any(|assessment| assessment.applicability == state)
+        {
+            return state.to_string();
+        }
+    }
+    "current".to_string()
 }
 
 fn task_family(packet: &NextPassPacket) -> String {
@@ -344,7 +441,9 @@ pub fn adjudicate(
         citations,
         model,
         task_family: task_family(&packet),
-        language: "unknown".to_string(),
+        repository_id: repository_id(&repo_root),
+        language: language(&repo_root),
+        freshness: freshness(&packet),
         change_size: change_size(&repo_root),
         check_strength: format!(
             "{} bound check history item(s), {} expected-failure negative control(s)",
@@ -355,4 +454,16 @@ pub fn adjudicate(
         retry_history: packet.check_histories,
     };
     append_signed_record(run_dir, JOURNAL, KIND, serde_json::to_value(outcome)?)
+}
+
+pub fn load_outcome_records(
+    run_dir: &Path,
+) -> Result<Vec<(IndependentOutcome, String)>, Box<dyn std::error::Error>> {
+    load_verified_signed_records(run_dir, JOURNAL, KIND)?
+        .into_iter()
+        .map(|record| {
+            let outcome = serde_json::from_value(record.payload)?;
+            Ok((outcome, record.record_hash))
+        })
+        .collect()
 }

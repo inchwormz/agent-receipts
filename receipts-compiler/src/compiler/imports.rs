@@ -45,6 +45,27 @@ struct EvalRecord {
     language: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportedTaskResult {
+    pub dataset_hash: String,
+    pub task_id: String,
+    pub result: String,
+    pub provider: String,
+    pub model_snapshot: String,
+    pub agent_name: String,
+    pub agent_version: String,
+    pub task_family: String,
+    pub repository_id: String,
+    pub language: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct VerifiedImports {
+    pub source_dataset_hashes: Vec<String>,
+    pub task_results: Vec<ImportedTaskResult>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EvalImportReceipt {
@@ -269,6 +290,96 @@ pub fn import_eval(
         prior_weight,
         stored_file,
         receipt_file,
+    })
+}
+
+pub fn load_verified_imports(
+    directory: &Path,
+) -> Result<VerifiedImports, Box<dyn std::error::Error>> {
+    if !directory.is_dir() {
+        return Err(format!(
+            "calibration imports directory not found: {}",
+            directory.display()
+        )
+        .into());
+    }
+    let mut receipts: Vec<PathBuf> = fs::read_dir(directory)?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".receipt.json"))
+        })
+        .collect();
+    receipts.sort();
+    let mut source_dataset_hashes = Vec::new();
+    let mut task_results = Vec::new();
+    for receipt_path in receipts {
+        let receipt: EvalImportReceipt = serde_json::from_slice(&fs::read(&receipt_path)?)?;
+        verify_import_receipt(&receipt)?;
+        let expected_name = format!("{}.receipt.json", receipt.dataset_hash);
+        if receipt_path.file_name().and_then(|name| name.to_str()) != Some(&expected_name) {
+            return Err(
+                "evaluation import receipt filename does not match its dataset hash".into(),
+            );
+        }
+        let source_path = directory.join(format!("{}.json", receipt.dataset_hash));
+        let source_bytes = fs::read(&source_path).map_err(|error| {
+            format!(
+                "evaluation import source is missing for {}: {error}",
+                receipt.dataset_hash
+            )
+        })?;
+        let actual_hash = blake3::hash(&source_bytes).to_hex().to_string();
+        if actual_hash != receipt.dataset_hash
+            || source_bytes.len() as u64 != receipt.source_byte_length
+        {
+            return Err(format!(
+                "evaluation import source hash/length mismatch for {}",
+                receipt.dataset_hash
+            )
+            .into());
+        }
+        let eval: PinnedEval = serde_json::from_slice(&source_bytes)?;
+        let weight = validate(&eval)?;
+        if eval.data_kind != receipt.data_kind
+            || eval.source_url != receipt.source_url
+            || eval.retrieval_date != receipt.retrieval_date
+            || eval.methodology_version != receipt.methodology_version
+            || eval.harness_version != receipt.harness_version
+            || eval.sample_size != receipt.sample_size
+            || eval.attribution != receipt.attribution
+            || eval.license != receipt.license
+            || weight != receipt.prior_weight
+        {
+            return Err("evaluation import receipt provenance disagrees with source bytes".into());
+        }
+        source_dataset_hashes.push(receipt.dataset_hash.clone());
+        if eval.data_kind == "task-results" {
+            task_results.extend(eval.records.into_iter().map(|record| ImportedTaskResult {
+                dataset_hash: receipt.dataset_hash.clone(),
+                task_id: record.task_id,
+                result: record.result,
+                provider: record.provider,
+                model_snapshot: record.model_snapshot,
+                agent_name: record.agent_name,
+                agent_version: record.agent_version,
+                task_family: record.task_family,
+                repository_id: record.repository_id,
+                language: record.language,
+                weight,
+            }));
+        }
+    }
+    source_dataset_hashes.sort();
+    source_dataset_hashes.dedup();
+    task_results.sort_by(|left, right| {
+        (&left.dataset_hash, &left.task_id).cmp(&(&right.dataset_hash, &right.task_id))
+    });
+    Ok(VerifiedImports {
+        source_dataset_hashes,
+        task_results,
     })
 }
 

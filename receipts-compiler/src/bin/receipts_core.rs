@@ -202,6 +202,91 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string(&report)?);
             Ok(())
         }
+        "calibration" => {
+            let rest: Vec<String> = args.collect();
+            match rest.first().map(String::as_str) {
+                Some("dataset") => {
+                    let runs = PathBuf::from(
+                        parse_flag_value(&rest, "--runs")
+                            .ok_or("`calibration dataset` requires --runs <dir>")?,
+                    );
+                    let out = PathBuf::from(
+                        parse_flag_value(&rest, "--out")
+                            .ok_or("`calibration dataset` requires --out <file>")?,
+                    );
+                    let imports = parse_flag_value(&rest, "--imports").map(PathBuf::from);
+                    let report = receipts_core::compiler::calibration::export_dataset(
+                        &runs,
+                        imports.as_deref(),
+                        &out,
+                    )?;
+                    println!("{}", serde_json::to_string(&report)?);
+                    Ok(())
+                }
+                Some("build") => {
+                    let runs = PathBuf::from(
+                        parse_flag_value(&rest, "--runs")
+                            .ok_or("`calibration build` requires --runs <dir>")?,
+                    );
+                    let out = PathBuf::from(
+                        parse_flag_value(&rest, "--out")
+                            .ok_or("`calibration build` requires --out <bundle>")?,
+                    );
+                    let imports = parse_flag_value(&rest, "--imports").map(PathBuf::from);
+                    let report = receipts_core::compiler::calibration::build_baseline(
+                        &runs,
+                        imports.as_deref(),
+                        &out,
+                    )?;
+                    println!("{}", serde_json::to_string(&report)?);
+                    Ok(())
+                }
+                Some("verify") => {
+                    let bundle = PathBuf::from(
+                        parse_flag_value(&rest, "--bundle")
+                            .ok_or("`calibration verify` requires --bundle <file>")?,
+                    );
+                    let verified =
+                        receipts_core::compiler::calibration::load_verified_bundle(&bundle)?;
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "ok": true,
+                            "dataset_hash": verified.dataset_hash,
+                            "publication_state": verified.publication_state,
+                        })
+                    );
+                    Ok(())
+                }
+                Some("promote") => {
+                    let dataset = PathBuf::from(
+                        parse_flag_value(&rest, "--dataset")
+                            .ok_or("`calibration promote` requires --dataset <file>")?,
+                    );
+                    let trainer_output = PathBuf::from(
+                        parse_flag_value(&rest, "--trainer-output")
+                            .ok_or("`calibration promote` requires --trainer-output <file>")?,
+                    );
+                    let lock = PathBuf::from(
+                        parse_flag_value(&rest, "--lock")
+                            .ok_or("`calibration promote` requires --lock <uv.lock>")?,
+                    );
+                    let out = PathBuf::from(
+                        parse_flag_value(&rest, "--out")
+                            .ok_or("`calibration promote` requires --out <bundle>")?,
+                    );
+                    let report = receipts_core::compiler::calibration::promote_hierarchical(
+                        &dataset,
+                        &trainer_output,
+                        &lock,
+                        &out,
+                    )?;
+                    println!("{}", serde_json::to_string(&report)?);
+                    Ok(())
+                }
+                _ => Err("usage: receipts calibration dataset|build --runs <dir> [--imports <dir>] --out <file> | calibration verify --bundle <file>".into()),
+            }
+        }
         "diff" => {
             let rest: Vec<String> = args.collect();
             diff_with_receipt(rest)
@@ -284,6 +369,14 @@ COMMANDS:
                             Append a signed independently cited task outcome
     import-eval --from <pinned-file> [--out <dir>]
                             Import a pinned evaluation with signed provenance
+    calibration build --runs <dir> [--imports <dir>] --out <bundle>
+                            Build a signed Beta-Binomial calibration baseline
+    calibration dataset --runs <dir> [--imports <dir>] --out <file>
+                            Export a signed trainer dataset from verified inputs
+    calibration verify --bundle <file>
+                            Verify bundle hash, signature, and eligibility shape
+    calibration promote --dataset <file> --trainer-output <file> --lock <uv.lock> --out <bundle>
+                            Recompute release gates and sign a hierarchical bundle
     diff --run-dir <dir> [--note <text>] [--patch]
                             Mint a WORK receipt: what changed in repo_root's tree
                             (numstat summary by default; --patch embeds the full

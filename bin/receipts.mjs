@@ -33,6 +33,7 @@ const COMMANDS = [
   "session",
   "adjudicate",
   "import-eval",
+  "calibration",
 ];
 
 function printHelp() {

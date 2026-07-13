@@ -129,6 +129,31 @@ Only success or failure with an independent grade is eligible for local training
 
 No probability is shown merely because outcomes exist. Calibration eligibility and held-out quality gates remain mandatory.
 
+## Calibrated false-green risk
+
+The always-available baseline groups only exact provider/model-snapshot/agent-version/task-family cohorts and applies a `Beta(1,1)` prior to independently adjudicated false-green outcomes:
+
+```bash
+receipts calibration build --runs .receipts/runs \
+  --imports .receipts/imports --out calibration.bundle.json
+receipts calibration verify --bundle calibration.bundle.json
+```
+
+Repeated executions of the same task are clustered, local independent outcomes have weight `1.0`, and pinned external task results have weight `0.25`. Below 30 effective outcomes the signed bundle says `insufficient_data` and contains no probability. At 30 or more, the Beta-Binomial posterior is still `provisional`; a baseline never calls itself calibrated merely because it has enough rows.
+
+The advanced model is deliberately offline and separate from runtime trust decisions:
+
+```bash
+receipts calibration dataset --runs .receipts/runs \
+  --imports .receipts/imports --out calibration.dataset.json
+uv run --frozen --python 3.12 python trainer/train.py \
+  --data calibration.dataset.json --out posterior.json
+receipts calibration promote --dataset calibration.dataset.json \
+  --trainer-output posterior.json --lock uv.lock --out calibration.bundle.json
+```
+
+The signed dataset fixes grouped repository/task holdouts before Python runs. The lock pins Python 3.12, PyMC, NumPy, and all transitive packages; the trainer fixes its seed and forces one compute thread. Rust then recomputes held-out metrics and refuses promotion unless there are at least 500 effective outcomes, five exact model-agent variants, and three task families with 50 outcomes each; Brier score improves at least 5% over the cohort base rate, expected calibration error is at most `0.05`, calibration slope is `0.8–1.2`, and the 95% posterior interval is at most `0.20` wide. A Python-authored `calibrated` label has no authority.
+
 ## What it catches
 
 Every row links to the red-team test in this repo that proves it. The marketing carries receipts too.

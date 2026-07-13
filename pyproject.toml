@@ -1,0 +1,14 @@
+[project]
+name = "agent-receipts-calibrator"
+version = "0.1.0"
+description = "Pinned offline hierarchical calibrator for Agent Receipts"
+requires-python = "==3.12.*"
+dependencies = [
+  "arviz==0.22.0",
+  "blake3==1.0.8",
+  "numpy==2.3.5",
+  "pymc==5.27.1",
+]
+
+[tool.uv]
+package = false
