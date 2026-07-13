@@ -34,16 +34,16 @@ jobs:
       - name: Cargo cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: mythos-compiler
+          workspaces: receipts-compiler
 
       - name: cargo fmt --check
-        run: cargo fmt --manifest-path mythos-compiler/Cargo.toml --check
+        run: cargo fmt --manifest-path receipts-compiler/Cargo.toml --check
 
       - name: cargo test
-        run: cargo test --manifest-path mythos-compiler/Cargo.toml
+        run: cargo test --manifest-path receipts-compiler/Cargo.toml
 
       - name: node --test
-        run: node --test tests/packet_shape_integrity.test.js
+        run: node --test tests/packet_shape_integrity.test.js tests/m0_trust_semantics.test.js tests/forgiving_ingest.test.js tests/receipts_attestation.test.js tests/worklist_resolutions.test.js tests/prime_brief.test.js tests/loop_composites.test.js
 
       - name: readiness
         run: node scripts/readiness.mjs
