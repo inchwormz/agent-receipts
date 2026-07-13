@@ -132,6 +132,15 @@ pub fn key_fingerprint() -> Result<String, Box<dyn std::error::Error>> {
     Ok(file.key_fingerprint)
 }
 
+pub fn current_executor_identity() -> Result<ExecutorIdentity, Box<dyn std::error::Error>> {
+    let (_, key) = load_or_create_key()?;
+    Ok(ExecutorIdentity {
+        principal_id: format!("ed25519:{}", key.key_fingerprint),
+        public_key: key.public_key,
+        key_fingerprint: key.key_fingerprint,
+    })
+}
+
 pub fn verify_executor_key() -> Result<String, Box<dyn std::error::Error>> {
     let path = executor_key_path()?;
     let (signing, file) = load_or_create_key()?;
@@ -296,6 +305,72 @@ fn current_binary_digest() -> Result<String, Box<dyn std::error::Error>> {
         .to_string())
 }
 
+pub fn current_engine_identity() -> Result<SignedEngineIdentity, Box<dyn std::error::Error>> {
+    Ok(SignedEngineIdentity {
+        protocol_version: ENGINE_PROTOCOL_VERSION.to_string(),
+        engine_version: env!("CARGO_PKG_VERSION").to_string(),
+        build_commit: BUILD_COMMIT.to_string(),
+        binary_digest: DigestRef {
+            hash_alg: "blake3-256".to_string(),
+            digest: current_binary_digest()?,
+        },
+        dependency_lock_digest: DigestRef {
+            hash_alg: "sha256".to_string(),
+            digest: DEPENDENCY_LOCK_DIGEST.to_string(),
+        },
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+    })
+}
+
+fn detached_message(domain: &[u8], message: &[u8]) -> Vec<u8> {
+    let mut signed = Vec::with_capacity(domain.len() + 1 + message.len());
+    signed.extend_from_slice(domain);
+    signed.push(0);
+    signed.extend_from_slice(message);
+    signed
+}
+
+pub fn sign_detached(
+    domain: &[u8],
+    message: &[u8],
+) -> Result<(ExecutorIdentity, String), Box<dyn std::error::Error>> {
+    let (signing, key) = load_or_create_key()?;
+    let executor = ExecutorIdentity {
+        principal_id: format!("ed25519:{}", key.key_fingerprint),
+        public_key: key.public_key,
+        key_fingerprint: key.key_fingerprint,
+    };
+    let signature = signing.sign(&detached_message(domain, message));
+    Ok((executor, hex_encode(&signature.to_bytes())))
+}
+
+pub fn verify_detached(
+    domain: &[u8],
+    message: &[u8],
+    executor: &ExecutorIdentity,
+    signature: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let public_bytes: [u8; 32] = hex_decode(&executor.public_key)?
+        .try_into()
+        .map_err(|_| "executor public key must contain 32 bytes")?;
+    let fingerprint = public_key_fingerprint(&public_bytes);
+    if executor.key_fingerprint != fingerprint
+        || executor.principal_id != format!("ed25519:{fingerprint}")
+    {
+        return Err("executor public-key fingerprint mismatch".into());
+    }
+    let signature_bytes: [u8; 64] = hex_decode(signature)?
+        .try_into()
+        .map_err(|_| "detached Ed25519 signature must contain 64 bytes")?;
+    VerifyingKey::from_bytes(&public_bytes)?
+        .verify(
+            &detached_message(domain, message),
+            &Signature::from_bytes(&signature_bytes),
+        )
+        .map_err(|_| "detached Ed25519 signature verification failed".into())
+}
+
 fn canonical_unsigned_envelope(
     envelope: &SignedReceiptEnvelope,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -355,21 +430,7 @@ pub fn sign_receipt_envelope(
             public_key: key.public_key,
             key_fingerprint: key.key_fingerprint,
         },
-        engine: SignedEngineIdentity {
-            protocol_version: ENGINE_PROTOCOL_VERSION.to_string(),
-            engine_version: env!("CARGO_PKG_VERSION").to_string(),
-            build_commit: BUILD_COMMIT.to_string(),
-            binary_digest: DigestRef {
-                hash_alg: "blake3-256".to_string(),
-                digest: current_binary_digest()?,
-            },
-            dependency_lock_digest: DigestRef {
-                hash_alg: "sha256".to_string(),
-                digest: DEPENDENCY_LOCK_DIGEST.to_string(),
-            },
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-        },
+        engine: current_engine_identity()?,
         hash_alg: "blake3-256".to_string(),
         signature_alg: "ed25519".to_string(),
         record_hash: String::new(),

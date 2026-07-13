@@ -43,7 +43,7 @@
     "ingest-subagent": "node bin/receipts.mjs ingest",
     "ready": "node bin/receipts.mjs ready",
     "test": "npm run test:node && npm run test:compiler && npm run ready",
-    "test:node": "node --test tests/packet_shape_integrity.test.js tests/m0_trust_semantics.test.js tests/forgiving_ingest.test.js tests/receipts_attestation.test.js tests/worklist_resolutions.test.js tests/prime_brief.test.js tests/loop_composites.test.js tests/engine_identity.test.js tests/install_sources.test.js tests/privacy_projection.test.js tests/rust_engine_commands.test.js",
+    "test:node": "node --test tests/packet_shape_integrity.test.js tests/m0_trust_semantics.test.js tests/forgiving_ingest.test.js tests/receipts_attestation.test.js tests/worklist_resolutions.test.js tests/prime_brief.test.js tests/loop_composites.test.js tests/engine_identity.test.js tests/install_sources.test.js tests/privacy_projection.test.js tests/rust_engine_commands.test.js tests/session_outcomes.test.js tests/import_eval.test.js",
     "test:compiler": "cargo test --locked --manifest-path receipts-compiler/Cargo.toml",
     "verify:determinism": "cargo test --locked --manifest-path receipts-compiler/Cargo.toml --test compile_determinism",
     "prepack": "node bin/source-identity.mjs",

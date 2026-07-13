@@ -30,6 +30,9 @@ const COMMANDS = [
   "project-public",
   "ready",
   "identity",
+  "session",
+  "adjudicate",
+  "import-eval",
 ];
 
 function printHelp() {

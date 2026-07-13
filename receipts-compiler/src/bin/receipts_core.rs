@@ -150,6 +150,58 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "absorb" => absorb_lane(args.collect()),
         "conclude" => conclude_pass(args.collect()),
         "ready" => run_readiness(),
+        "session" => {
+            let rest: Vec<String> = args.collect();
+            if rest.first().map(String::as_str) != Some("capture") {
+                return Err("usage: receipts session capture --run-dir <dir> --adapter codex|claude|generic".into());
+            }
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir")
+                    .ok_or("`session capture` requires --run-dir <dir>")?,
+            );
+            let adapter = parse_flag_value(&rest, "--adapter")
+                .ok_or("`session capture` requires --adapter codex|claude|generic")?;
+            preflight_run_dir(&run_dir)?;
+            let record =
+                receipts_core::compiler::session::capture_session(&run_dir, &adapter, &iso_now())?;
+            println!("{}", serde_json::to_string(&record)?);
+            Ok(())
+        }
+        "adjudicate" => {
+            let rest: Vec<String> = args.collect();
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir")
+                    .ok_or("`adjudicate` requires --run-dir <dir>")?,
+            );
+            let result = parse_flag_value(&rest, "--result")
+                .ok_or("`adjudicate` requires --result success|failure|unknown")?;
+            let grade = parse_flag_value(&rest, "--grade")
+                .ok_or("`adjudicate` requires --grade <grade>")?;
+            let cites = parse_flag_values(&rest, "--cite");
+            preflight_run_dir(&run_dir)?;
+            let record = receipts_core::compiler::outcomes::adjudicate(
+                &run_dir,
+                &result,
+                &grade,
+                &cites,
+                &iso_now(),
+            )?;
+            println!("{}", serde_json::to_string(&record)?);
+            Ok(())
+        }
+        "import-eval" => {
+            let rest: Vec<String> = args.collect();
+            let from = PathBuf::from(
+                parse_flag_value(&rest, "--from")
+                    .ok_or("`import-eval` requires --from <pinned-file>")?,
+            );
+            let out = parse_flag_value(&rest, "--out")
+                .map(PathBuf::from)
+                .unwrap_or(std::env::current_dir()?.join(".receipts").join("imports"));
+            let report = receipts_core::compiler::imports::import_eval(&from, &out, &iso_now())?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
         "diff" => {
             let rest: Vec<String> = args.collect();
             diff_with_receipt(rest)
@@ -226,6 +278,12 @@ COMMANDS:
     conclude --run-dir <dir> --synthesis <text> [--skip-report]
                             Synthesize, gate, report, and print the next brief
     ready                   Exercise the installed engine end to end
+    session capture --run-dir <dir> --adapter codex|claude|generic
+                            Capture exact model, agent, runtime, and engine identity
+    adjudicate --run-dir <dir> --result success|failure|unknown --grade <grade> --cite <source>
+                            Append a signed independently cited task outcome
+    import-eval --from <pinned-file> [--out <dir>]
+                            Import a pinned evaluation with signed provenance
     diff --run-dir <dir> [--note <text>] [--patch]
                             Mint a WORK receipt: what changed in repo_root's tree
                             (numstat summary by default; --patch embeds the full
@@ -288,6 +346,14 @@ fn parse_path_arg(args: Vec<String>, cmd: &str) -> Result<PathBuf, Box<dyn std::
 fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
     let index = args.iter().position(|arg| arg == flag)?;
     args.get(index + 1).cloned()
+}
+
+fn parse_flag_values(args: &[String], flag: &str) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, value)| value.as_str() == flag)
+        .filter_map(|(index, _)| args.get(index + 1).cloned())
+        .collect()
 }
 
 fn run_self(args: &[String]) -> Result<std::process::Output, Box<dyn std::error::Error>> {

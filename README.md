@@ -112,6 +112,23 @@ Schema `2.0.0` never collapses “observed,” “passed,” “still applies,�
 
 Agent-supplied confidence survives only as `reported_confidence`; it never changes promotion, gates, reports, or later statistics. Receipt events are shown separately from Evidence Coverage. Self-authored verifier prose and caller-supplied lane names are attribution, not independence.
 
+## Exact identity and independent outcomes
+
+Receipts records model and agent identity from explicit local metadata; it never guesses a model snapshot from a mutable alias. A generic adapter reads `session/generic.json`, while the Codex and Claude adapters inspect only metadata their runtimes expose:
+
+```bash
+receipts session capture --run-dir .receipts/runs/fix-login --adapter generic
+receipts adjudicate --run-dir .receipts/runs/fix-login \
+  --result success --grade signed-human-review --cite file:review.txt
+receipts import-eval --from pinned-evaluation.json
+```
+
+Session captures and outcomes are append-only BLAKE3/Ed25519 journals with signed terminal heads. A model-specific cohort requires explicit provider, resolved snapshot, agent name, and agent version; an unresolved alias or incomplete agent identity is recorded but excluded. Each adjudication recompiles the current run, binds the full check/retry history, hashes its citations, and records the authenticated local adjudicator identity.
+
+Only success or failure with an independent grade is eligible for local training data: `independent-hidden-tests`, `benchmark-adjudication`, `signed-human-review`, or `equivalent-independent`. An `unknown` result is always excluded. Merge, revert, and incident-free signals are supporting only. Self-report, a bare green gate, a success label, and model-card claims are excluded. Pinned task-level external results retain source, retrieval date, content hash, harness/methodology, attribution, licence, and sample size, and receive only `0.25` prior weight. Model-card metadata receives zero outcome weight.
+
+No probability is shown merely because outcomes exist. Calibration eligibility and held-out quality gates remain mandatory.
+
 ## What it catches
 
 Every row links to the red-team test in this repo that proves it. The marketing carries receipts too.
@@ -123,6 +140,7 @@ Every row links to the red-team test in this repo that proves it. The marketing 
 | fabricates a receipt id it doesn't own | Demoted at ingest as receipt impersonation | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
 | cites a file or line that doesn't exist | Citation unresolvable; claim demoted with the warning attached | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
 | edits, replays, or truncates the signed receipt journal | Record hash, Ed25519 signature, run binding, or pinned head fails closed | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
+| changes a signed session or adjudicated outcome | Its separate signed journal and terminal head fail closed before another record can append | [session_outcomes.test.js](./tests/session_outcomes.test.js) |
 | changes or replaces a stored artifact | Compile re-hashes the bytes before use and fails closed | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
 | claims to be a different agent | Caller-assigned identity wins; the self-claimed one is quarantined as `claimed_*` | [m0_trust_semantics.test.js](./tests/m0_trust_semantics.test.js) |
 | reports in shorthand, broken JSON, or pure prose | Repaired or harvested into cited records; nothing is rejected for format | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
@@ -231,9 +249,9 @@ See [docs/PROOF.md](./docs/PROOF.md) for the full stories and [docs/HOW-IT-WORKS
 
 A trust tool that hides its own gaps is broken at the root, so here are ours, in the open:
 
-- **Single-operator threat model.** Receipts prove what ran on your machine under your account. Any process on the box can mint receipts; per-principal signing and executor binding are on the roadmap, in that order.
-- **The hash chain uses fnv1a-64.** Tamper-evident against accident and casual meddling, and fast. It is not cryptographic; BLAKE3 signing is the planned upgrade.
-- **A passing label attests one thing**: that exact command exited 0. It does not prove the command semantically covers the claim citing it. Choosing the right command is still your judgment.
+- **Local-host threat boundary.** Ed25519 identifies the local executor key and detects later changes; it cannot protect evidence from a process that controls the host while Receipts runs.
+- **Legacy evidence stays weak.** FNV-based V1 records remain readable for compatibility but always carry `legacy_weak`; they never silently acquire a signature or stronger trust.
+- **Checks still need honest scope.** The engine binds a passing check to declared paths, environment, version, and claims. A badly designed check manifest can overstate what its command actually tests, so negative controls and review of the manifest still matter.
 
 ## FAQ
 
