@@ -10,9 +10,19 @@ your agent: "Done! Fixed the bug, all 54 tests passing ✅"
 the tests:  were never run
 ```
 
-Every team running coding agents has lived this. Agents report success at the rate you reward it. Reading every transcript doesn't scale, and asking agents to be more honest is not a mechanism.
+## Why
 
-Agent Receipts is the mechanism. The orchestrator mints **hash-chained execution receipts** for every command that matters. Claims that cite a passing receipt get promoted to **attested facts**. Claims contradicted by a failing receipt are **mechanically refuted** and the run goes red. Everything else stays labeled as hearsay. Your agents don't have to cooperate, follow a format, or even know receipts exist.
+Every team running agents has lived this, and the bill arrives later. An unverified agent claim costs you at compound interest:
+
+- **Costly mistakes ship.** "Done, tests pass" gets merged, and the failure surfaces in front of users instead of inside the run.
+- **Undo is more expensive than do.** Reverting commits, bisecting what actually broke, redoing the task with supervision this time. The cleanup routinely costs more than the original work.
+- **Bad research poisons everything downstream.** A subagent's findings get taken point blank, and every plan built on them inherits the error at the root, where it is hardest to trace.
+- **Manual verification burns your scarcest resource.** When the orchestrator re-reads transcripts and re-runs checks by hand, its context window fills with evidence instead of judgment. Orchestrator context is the most expensive real estate in the fleet, and verification chews through it.
+- **Trust decays to zero.** After enough burns you re-check everything yourself, and the fleet stops paying for itself.
+
+Reading every transcript doesn't scale. Asking agents to be more honest is not a mechanism.
+
+Agent Receipts is the mechanism. The orchestrator mints **hash-chained execution receipts** for every command that matters. Claims that cite a passing receipt get promoted to **attested facts**. Claims contradicted by a failing receipt are **mechanically refuted** and the run goes red. Everything else stays labeled as hearsay. Your agents don't have to cooperate, follow a format, or even know receipts exist. And the orchestrator reads a compressed brief of proven facts, a few hundred tokens, so its context stays free for the work only it can do.
 
 ---
 
@@ -101,18 +111,18 @@ Every row links to the red-team test in this repo that proves it. The marketing 
 
 ```mermaid
 sequenceDiagram
-    participant L as Lane (agent)
-    participant P as Prime (you / orchestrator)
-    participant E as Receipts engine
-
-    L->>P: "Refactor done. cargo test all green."
-    P->>E: receipts absorb (lane report, verbatim)
-    P->>E: receipts run --label test:cargo -- cargo test
-    E-->>P: receipt rcpt-0007: exit 1 ❌
-    P->>E: receipts conclude
-    E-->>P: GATE RED: claim ev-lane-3 ("all green")<br/>refuted by receipt rcpt-0007
-    Note over P: You found the lie in one command,<br/>without reading one line of transcript.
+    participant Lane as Lane (agent)
+    participant Prime as Prime (orchestrator)
+    participant Engine as Receipts engine
+    Lane->>Prime: Refactor done. cargo test all green.
+    Prime->>Engine: receipts absorb (lane report, verbatim)
+    Prime->>Engine: receipts run --label test cargo -- cargo test
+    Engine-->>Prime: receipt rcpt-0007 exits 1
+    Prime->>Engine: receipts conclude
+    Engine-->>Prime: GATE RED, claim refuted by rcpt-0007
 ```
+
+One command found the lie. Prime never read a line of transcript, and the orchestrator's context stayed free for judgment.
 
 ## Zero burden on your agents
 
