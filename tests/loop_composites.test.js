@@ -1,0 +1,230 @@
+// Loop composites: `absorb` (ingest -> diff -> recompile, one motion per
+// lane) and `conclude` (record-synthesis -> gate -> report -> next, one
+// motion to end a pass). Dispatcher-level orchestration in bin/receipts.mjs
+// — these tests exercise the composite CLI itself, not the underlying
+// scripts/binary in isolation (those already have their own suites).
+import { strict as assert } from "node:assert";
+import { spawnSync } from "node:child_process";
+import test from "node:test";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const thisFile = fileURLToPath(import.meta.url);
+const repoRoot = path.dirname(path.dirname(thisFile));
+
+function freshRunDir(name) {
+  const stamp = new Date().toISOString().replace(/[-:.]/g, "").replace(/\d{3}Z$/, "Z");
+  const runDir = path.join(repoRoot, ".codex", "receipts", `tmp-lc-${stamp}-${process.pid}-${name}`);
+  fs.mkdirSync(path.join(runDir, "raw", "subagents"), { recursive: true });
+  fs.mkdirSync(path.join(runDir, "worker-results"), { recursive: true });
+  fs.mkdirSync(path.join(runDir, "verifier-results"), { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, "manifest.json"),
+    JSON.stringify(
+      {
+        objective_id: `obj-lc-${stamp}`,
+        run_id: `run-lc-${stamp}`,
+        branch_id: "main",
+        pass_id: "pass-0001",
+        created_at: new Date().toISOString(),
+        repo_root: repoRoot,
+      },
+      null,
+      2,
+    ) + "\n",
+    "utf8",
+  );
+  fs.writeFileSync(path.join(runDir, "task.md"), `loop-composite: ${name}\n`, "utf8");
+  fs.writeFileSync(path.join(runDir, "raw", "objective.md"), `# Objective\n\n${name}\n`, "utf8");
+  fs.writeFileSync(
+    path.join(runDir, "worker-results", "evidence.jsonl"),
+    JSON.stringify({
+      id: "ev-objective",
+      kind: "objective",
+      summary: `loop-composite: ${name}`,
+      source_ids: ["raw:objective.md"],
+      observed_at: new Date().toISOString(),
+    }) + "\n",
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(runDir, "verifier-results", "findings.jsonl"),
+    JSON.stringify({
+      id: "vf-codex-synthesis-pending",
+      summary: "Codex synthesis has not consumed this packet yet",
+      status: "pending",
+      verifier_score: 0.0,
+      source_ids: ["raw:objective.md"],
+      finding_kind: "synthesis",
+    }) + "\n",
+    "utf8",
+  );
+  return runDir;
+}
+
+function removeDir(dir) {
+  if (!dir) return;
+  if (!dir.startsWith(path.join(repoRoot, ".codex", "receipts"))) {
+    throw new Error(`refusing to remove outside .codex/receipts: ${dir}`);
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function runNode(args, options = {}) {
+  return spawnSync("node", args, { cwd: repoRoot, encoding: "utf8", shell: process.platform === "win32", ...options });
+}
+
+function readJsonl(file) {
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l));
+}
+
+function absorb(runDir, lane, agentId, laneFile, extraArgs = []) {
+  return runNode([
+    "bin/receipts.mjs",
+    "absorb",
+    "--run-dir",
+    runDir,
+    "--lane",
+    lane,
+    "--agent-id",
+    agentId,
+    "--from",
+    laneFile,
+    ...extraArgs,
+  ]);
+}
+
+function conclude(runDir, synthesis, extraArgs = [], options = {}) {
+  return runNode(["bin/receipts.mjs", "conclude", "--run-dir", runDir, "--synthesis", synthesis, ...extraArgs], options);
+}
+
+const now = () => new Date().toISOString();
+
+test("absorb happy path: fenced lane record lands in evidence, mints a work:tree receipt, recompiles the packet, prints one ok:true JSON line", (t) => {
+  const runDir = freshRunDir("absorb-happy");
+  t.after(() => removeDir(runDir));
+
+  // Baseline packet so recompilation can be proven, not assumed.
+  assert.equal(runNode(["driver.mjs", "--run-dir", runDir]).status, 0);
+  const packetPath = path.join(runDir, "state", "next_pass_packet.json");
+  const beforeContent = fs.readFileSync(packetPath, "utf8");
+  const beforeMtime = fs.statSync(packetPath).mtimeMs;
+
+  const laneFile = path.join(runDir, "raw", "lane-absorb.md");
+  fs.writeFileSync(
+    laneFile,
+    [
+      "```receipts-evidence-jsonl",
+      JSON.stringify({
+        id: "ev-absorb-claim",
+        kind: "observation",
+        summary: "Absorb happy-path claim citing a real file in the repo",
+        source_ids: ["file:driver.mjs:1"],
+        observed_at: now(),
+      }),
+      "```",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  const result = absorb(runDir, "absorb-lane", "absorb-agent", laneFile);
+  assert.equal(result.status, 0, `absorb must succeed: ${result.stderr}`);
+
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.equal(lines.length, 1, `absorb must print exactly one stdout line; got ${JSON.stringify(result.stdout)}`);
+  const parsed = JSON.parse(lines[0]);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.lane, "absorb-lane");
+  assert.equal(parsed.compiled, true);
+  assert.ok(parsed.ingest && parsed.ingest.ok === true, `ingest field must be step-1's parsed JSON; got ${JSON.stringify(parsed.ingest)}`);
+  assert.equal(typeof parsed.work_receipt, "string", "diff ran (no --no-diff) so a work receipt id is expected");
+
+  const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  assert.ok(evidence.some((r) => r.id === "ev-absorb-claim"), "lane record must land in evidence.jsonl");
+
+  const receipts = readJsonl(path.join(runDir, "receipts", "receipts.jsonl"));
+  assert.ok(
+    receipts.some((r) => r.label === "work:tree" && r.id === parsed.work_receipt),
+    `a work:tree receipt matching the reported work_receipt id must exist; got ${JSON.stringify(receipts)}`,
+  );
+
+  const afterContent = fs.readFileSync(packetPath, "utf8");
+  const afterMtime = fs.statSync(packetPath).mtimeMs;
+  assert.ok(afterMtime >= beforeMtime, "packet mtime must not regress");
+  assert.notEqual(afterContent, beforeContent, "packet content must reflect the newly absorbed lane");
+});
+
+test("absorb propagates ingest failure (nonexistent --from file -> nonzero exit)", (t) => {
+  const runDir = freshRunDir("absorb-ingest-fail");
+  t.after(() => removeDir(runDir));
+
+  const missing = path.join(runDir, "raw", "does-not-exist.md");
+  const result = absorb(runDir, "bad-lane", "bad-agent", missing);
+  assert.notEqual(result.status, 0, "absorb must fail when ingest fails");
+  assert.ok(result.stderr && result.stderr.trim().length > 0, "ingest's stderr must be propagated to absorb's stderr");
+});
+
+test("conclude on a green-able run: exit 0, gate-report.json written ok:true, brief printed", (t) => {
+  const runDir = freshRunDir("conclude-green");
+  t.after(() => removeDir(runDir));
+
+  const laneFile = path.join(runDir, "raw", "lane-green.md");
+  fs.writeFileSync(
+    laneFile,
+    [
+      "```receipts-evidence-jsonl",
+      JSON.stringify({
+        id: "ev-green-claim",
+        kind: "observation",
+        summary: "Confirmed the driver entrypoint exists as expected",
+        source_ids: ["file:driver.mjs:1"],
+        observed_at: now(),
+      }),
+      "```",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const setup = absorb(runDir, "green-lane", "green-agent", laneFile);
+  assert.equal(setup.status, 0, `absorb setup must succeed: ${setup.stderr}`);
+
+  const env = { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" };
+  const result = conclude(runDir, "green pass synthesis", [], { env });
+  assert.equal(result.status, 0, `conclude must exit 0 on a green run: stdout=${result.stdout}\nstderr=${result.stderr}`);
+
+  const gateReportPath = path.join(runDir, "state", "gate-report.json");
+  assert.ok(fs.existsSync(gateReportPath), "gate-report.json must be written");
+  const gateReport = JSON.parse(fs.readFileSync(gateReportPath, "utf8"));
+  assert.equal(gateReport.ok, true, `gate report must parse with ok:true; got ${JSON.stringify(gateReport)}`);
+
+  assert.ok(result.stdout.includes("RECEIPTS BRIEF"), `stdout must contain the Prime brief; got ${result.stdout}`);
+});
+
+test("conclude on a run with an unresolved blocker: exit nonzero, gate-report.json still written ok:false, brief still printed", (t) => {
+  const runDir = freshRunDir("conclude-red");
+  t.after(() => removeDir(runDir));
+
+  const laneFile = path.join(runDir, "raw", "lane-blocked.md");
+  fs.writeFileSync(laneFile, "Tried to reach the target.\n\nBLOCKED could-not-reach-target\n", "utf8");
+  const setup = absorb(runDir, "blocked-lane", "blocked-agent", laneFile);
+  assert.equal(setup.status, 0, `absorb setup must succeed: ${setup.stderr}`);
+
+  const env = { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" };
+  const result = conclude(runDir, "red pass synthesis", [], { env });
+  assert.notEqual(result.status, 0, "conclude must exit nonzero when the gate is red (unresolved blocker)");
+
+  const gateReportPath = path.join(runDir, "state", "gate-report.json");
+  assert.ok(fs.existsSync(gateReportPath), "gate-report.json must be written even when the gate is red");
+  const gateReport = JSON.parse(fs.readFileSync(gateReportPath, "utf8"));
+  assert.equal(gateReport.ok, false, `gate report must parse with ok:false; got ${JSON.stringify(gateReport)}`);
+
+  assert.ok(result.stdout.includes("RECEIPTS BRIEF"), `brief must print even when red; got ${result.stdout}`);
+});

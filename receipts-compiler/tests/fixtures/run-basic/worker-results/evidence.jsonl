@@ -1,0 +1,2 @@
+{"id":"ev-1","kind":"observation","summary":"The run has a task file and raw notes.","source_ids":["raw:notes.md"],"observed_at":"2026-04-21T00:00:00Z"}
+{"id":"ev-2","kind":"constraint","summary":"Every packet item must retain source references.","source_ids":["raw:notes.md"],"observed_at":"2026-04-21T00:00:00Z"}

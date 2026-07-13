@@ -1,0 +1,22 @@
+# Rust build artefacts
+receipts-compiler/target/
+
+# Runtime-generated run dirs (created by driver.mjs)
+.codex/
+
+# Generated compiler output under fixtures (wiped and re-created by readiness)
+receipts-compiler/tests/fixtures/*/state/
+
+# Orphan UTF-16 scratch files — not used by any code path
+readiness-fixture-packet.json
+readiness-new-packet.json
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
+*.swp
+
+# Project-local Receipts run dirs (created by driver.mjs / receipts init)
+.mythos/
+.gstack/
+.receipts/

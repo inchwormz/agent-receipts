@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://receipts.local/schemas/decision_log_record.schema.json",
+  "title": "DecisionLogRecord",
+  "type": "object",
+  "required": [
+    "id",
+    "run_id",
+    "pass_id",
+    "decision_kind",
+    "summary",
+    "source_ids",
+    "selected_action_ids",
+    "created_at",
+    "promotion"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "run_id": { "type": "string" },
+    "pass_id": { "type": "string" },
+    "decision_kind": { "type": "string" },
+    "summary": { "type": "string" },
+    "source_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "selected_action_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": { "type": "string" },
+    "promotion": {
+      "type": ["object", "null"],
+      "required": ["id", "kind", "source_ids", "decision", "reason", "expires_after_pass"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "source_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "deny", "review"]
+        },
+        "reason": { "type": "string" },
+        "expires_after_pass": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

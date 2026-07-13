@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://receipts.local/schemas/promotion_record.schema.json",
+  "title": "PromotionRecord",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "source_ids",
+    "decision",
+    "reason",
+    "expires_after_pass"
+  ],
+  "properties": {
+    "id": { "type": "string" },
+    "kind": { "type": "string" },
+    "source_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["allow", "deny", "review"]
+    },
+    "reason": { "type": "string" },
+    "expires_after_pass": {
+      "type": ["string", "null"]
+    }
+  },
+  "additionalProperties": false
+}

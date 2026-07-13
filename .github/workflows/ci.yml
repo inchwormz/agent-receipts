@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mythos-compiler
+
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path mythos-compiler/Cargo.toml --check
+
+      - name: cargo test
+        run: cargo test --manifest-path mythos-compiler/Cargo.toml
+
+      - name: node --test
+        run: node --test tests/packet_shape_integrity.test.js
+
+      - name: readiness
+        run: node scripts/readiness.mjs

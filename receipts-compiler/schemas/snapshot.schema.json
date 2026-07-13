@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://receipts.local/schemas/snapshot.schema.json",
+  "title": "Snapshot",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "pass_id",
+    "branch_id",
+    "created_at",
+    "inputs",
+    "worker_results",
+    "state_delta",
+    "artifact_refs"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["1.1.0", "1.2.0"] },
+    "run_id": { "type": "string" },
+    "pass_id": { "type": "string" },
+    "branch_id": { "type": "string" },
+    "created_at": { "type": "string" },
+    "inputs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/snapshotInput" }
+    },
+    "worker_results": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/workerResult" }
+    },
+    "state_delta": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/stateDelta" }
+    },
+    "artifact_refs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceRef" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "sourceRef": {
+      "type": "object",
+      "required": ["source_id", "path", "kind", "hash", "hash_alg", "span", "observed_at"],
+      "properties": {
+        "source_id": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "minLength": 1 },
+        "hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "hash_alg": { "type": "string", "enum": ["fnv1a-64"] },
+        "hash_basis": { "type": "string", "enum": ["content", "label"] },
+        "span": { "type": ["string", "null"] },
+        "observed_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "snapshotInput": {
+      "type": "object",
+      "required": ["id", "kind", "summary", "ref_ids"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "summary": { "type": "string" },
+        "ref_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "workerResult": {
+      "type": "object",
+      "required": ["id", "worker", "status", "output_ids", "notes"],
+      "properties": {
+        "id": { "type": "string" },
+        "worker": { "type": "string" },
+        "status": { "type": "string" },
+        "output_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "notes": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "stateDelta": {
+      "type": "object",
+      "required": ["id", "kind", "target_id", "summary"],
+      "properties": {
+        "id": { "type": "string" },
+        "kind": { "type": "string" },
+        "target_id": { "type": "string" },
+        "summary": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

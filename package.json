@@ -1,0 +1,48 @@
+{
+  "name": "agent-receipts",
+  "version": "0.1.0",
+  "description": "Proof-of-work for AI agent claims. Hash-chained execution receipts, forgiving ingest of natural agent prose, and a strict gate that promotes only receipt-backed facts. JS runtime around the receipts-core Rust compiler.",
+  "license": "MIT",
+  "author": "inchwormz <johnrichardmckeown@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inchwormz/agent-receipts.git"
+  },
+  "homepage": "https://github.com/inchwormz/agent-receipts",
+  "bugs": {
+    "url": "https://github.com/inchwormz/agent-receipts/issues"
+  },
+  "keywords": ["ai", "agents", "determinism", "provenance", "claude", "receipts", "packet-compiler"],
+  "type": "module",
+  "main": "driver.mjs",
+  "bin": {
+    "receipts": "bin/receipts.mjs"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "tests/",
+    "skills/",
+    "receipts-compiler/schemas/",
+    "receipts-compiler/tests/fixtures/",
+    "driver.mjs",
+    "receipts-agent-policy.json",
+    "SKILL.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node driver.mjs",
+    "compile": "node driver.mjs",
+    "gate": "node scripts/strict-gate.mjs",
+    "ingest-subagent": "node scripts/ingest-subagent.mjs",
+    "ready": "node scripts/readiness.mjs",
+    "test": "node --test tests/packet_shape_integrity.test.js && node scripts/readiness.mjs",
+    "test:compiler": "cargo test --manifest-path receipts-compiler/Cargo.toml",
+    "verify:determinism": "cargo test --manifest-path receipts-compiler/Cargo.toml --test compile_determinism",
+    "postinstall": "node bin/postinstall.mjs"
+  }
+}

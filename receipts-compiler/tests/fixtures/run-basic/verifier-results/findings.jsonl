@@ -1,0 +1,2 @@
+{"id":"vf-1","summary":"Packet provenance validated","status":"passed","verifier_score":1.0,"source_ids":["evidence:ev-2"]}
+{"id":"vf-2","summary":"Controller integration missing","status":"failed","verifier_score":0.2,"source_ids":["raw:notes.md"]}

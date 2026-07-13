@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "_note": "Optional environment-specific policy for Receipts subagent fanout. Receipts itself only requires the fanout + prime_consumption contract. Model names, reasoning-effort, and provider-specific fields belong in the host environment (Claude Code settings, Codex config, etc.), not in the Receipts contract.",
+  "fanout": {
+    "micro_lanes": 5,
+    "broad_lanes_max": 5
+  },
+  "prime_consumption": {
+    "raw_subagent_chat_allowed": false,
+    "required_promotion_path": "subagent output -> raw/subagents/<lane>.md -> ingest-subagent.mjs -> worker-results/*.jsonl -> driver.mjs --run-dir -> next_pass_packet.json"
+  }
+}
