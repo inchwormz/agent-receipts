@@ -1,5 +1,5 @@
 # Agent Receipts one-shot installer for Windows PowerShell.
-# Builds the Rust engine from this repo, installs the Node CLI, then
+# Installs the npm dispatcher, which builds the bundled Rust engine, then
 # proves the whole pipeline end to end with the readiness check.
 $ErrorActionPreference = 'Stop'
 
@@ -16,19 +16,11 @@ Require-Cmd 'cargo' 'https://rustup.rs'
 Require-Cmd 'node'  'https://nodejs.org'
 Require-Cmd 'npm'   'comes with Node'
 
-$tmp = Join-Path $env:TEMP "agent-receipts-install-$([guid]::NewGuid().ToString('n').Substring(0,8))"
-
-Write-Host 'agent-receipts: 1/3 building the Rust engine (receipts-core)...'
-git clone --quiet --depth 1 https://github.com/inchwormz/agent-receipts $tmp
-cargo install --quiet --path (Join-Path $tmp 'receipts-compiler')
-
-Write-Host 'agent-receipts: 2/3 installing the Node CLI (receipts)...'
+Write-Host 'agent-receipts: 1/2 installing the dispatcher and bundled Rust engine...'
 npm install -g --silent github:inchwormz/agent-receipts
 
-Write-Host 'agent-receipts: 3/3 running readiness...'
+Write-Host 'agent-receipts: 2/2 running readiness...'
 receipts ready
-
-Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host 'agent-receipts: ready. Try:'

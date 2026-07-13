@@ -331,11 +331,10 @@ pub struct Snapshot {
     pub artifact_refs: Vec<SourceRef>,
 }
 
-/// M1: a runtime-minted execution receipt. Written ONLY by `receipts run` -
-/// agents cannot author these (ingest downgrades impersonations). The journal
-/// is hash-chained: `record_hash` = fnv1a of the record serialized WITHOUT
-/// `record_hash`, and `prev_record_hash` links to the previous entry (or
-/// "GENESIS"), so any post-hoc edit breaks the chain at compile time.
+/// Frozen V1 execution-receipt payload. Legacy journal lines use the original
+/// FNV chain. Signed V2 envelopes reuse this struct as their payload with a
+/// blank record_hash; the envelope owns BLAKE3, typed linkage, engine identity,
+/// and Ed25519 signature. Never add fields here: legacy preimages are frozen.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReceiptRecord {
     pub id: String,

@@ -159,6 +159,18 @@ pub fn find_check<'a>(
         .ok_or_else(|| format!("check `{id}` is not declared in .receipts/checks.toml").into())
 }
 
+pub fn validate_manifest_bindings(
+    repo_root: &Path,
+) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    let Some(manifest) = load_manifest(repo_root)? else {
+        return Ok(None);
+    };
+    for check in &manifest.checks {
+        compute_binding(repo_root, check)?;
+    }
+    Ok(Some(manifest.checks.len()))
+}
+
 pub fn run_check(
     run_dir: &Path,
     repo_root: &Path,

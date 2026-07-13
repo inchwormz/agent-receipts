@@ -89,7 +89,15 @@ flowchart LR
     GATE -->|"exit 1"| RED["🚫 named refutations<br/>+ a worklist"]
 ```
 
-The runtime is a thin `receipts` Node dispatcher over the bundled `receipts-core` Rust engine. The dispatcher builds that exact source and verifies its protocol, build commit, dependency lock, platform, and binary digest before execution; ambient `PATH` binaries are ignored. No server, no accounts, no telemetry. Runs are plain directories you can read, diff, and commit.
+The runtime is one Rust binary named `receipts`, reached through a tiny npm dispatcher. The dispatcher builds that exact bundled source and verifies its protocol, build commit, dependency lock, platform, and binary digest before execution; ambient `PATH` binaries are ignored. No server, no accounts, no telemetry. Runs are plain directories you can read, diff, and commit.
+
+### Cryptographic boundary
+
+New execution records are canonical V2 envelopes in the one `receipts/receipts.jsonl` journal. BLAKE3-256 binds the run ID, record kind, sequence, typed previous digest, command payload and artifact digests, authenticated executor principal, and exact engine identity. An Ed25519 signature covers that digest, and a signed head detects removal of the journal tail. The local executor key is generated on first use outside repositories with user-only filesystem permissions; `receipts doctor` audits the key, executable identity, schemas, and check manifest.
+
+Signatures prove continuity of one executor identity and detect post-hoc alteration. They do **not** prove that a claim is true, make the signing user independent, or protect a host already compromised while Receipts is running. Independence still requires a valid signature from a separately authenticated principal. Legacy FNV records remain readable and are always labeled `legacy_weak`; the engine never rewrites or silently upgrades them.
+
+Raw artifacts, prompts, source text, repository URLs, and absolute paths stay local. `receipts project-public --run-dir <d> --out <file>` constructs a new deterministic allowlist-only aggregate; it never redacts a copy of the private packet. Publication consent and public cards are separate later-stage operations.
 
 ## Typed trust
 
@@ -114,8 +122,8 @@ Every row links to the red-team test in this repo that proves it. The marketing 
 | claims tests passed that were never run | Claim stays asserted; the brief flags it for verification | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
 | fabricates a receipt id it doesn't own | Demoted at ingest as receipt impersonation | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
 | cites a file or line that doesn't exist | Citation unresolvable; claim demoted with the warning attached | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
-| edits the receipt journal after the fact | Hash chain breaks; compile fails fatally | [receipts.rs tests](./receipts-compiler/src/compiler/receipts.rs) |
-| tries to overwrite a stored artifact | Content-address collision with different bytes is a hard error | [receipts.rs tests](./receipts-compiler/src/compiler/receipts.rs) |
+| edits, replays, or truncates the signed receipt journal | Record hash, Ed25519 signature, run binding, or pinned head fails closed | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
+| changes or replaces a stored artifact | Compile re-hashes the bytes before use and fails closed | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
 | claims to be a different agent | Caller-assigned identity wins; the self-claimed one is quarantined as `claimed_*` | [m0_trust_semantics.test.js](./tests/m0_trust_semantics.test.js) |
 | reports in shorthand, broken JSON, or pure prose | Repaired or harvested into cited records; nothing is rejected for format | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
 | mints a work receipt to look productive | Work receipts remain execution events; they can never upgrade a claim | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
@@ -145,7 +153,7 @@ This is the design constraint everything else serves: **you cannot change agent 
 - Lane briefs are task-only. You never send format instructions, schemas, or protocol.
 - Ingest accepts anything. Fenced records if the agent emitted them (liberally repaired), otherwise claims are harvested from natural prose: any sentence citing a path or `file.ext:line` becomes its own record with a hash-verified citation and a drill-down span back into the original text.
 - Repairs are free and logged. Demotion is reserved for semantic problems (citations that don't resolve, impersonation), never for formatting.
-- The one thing agents can't do is manufacture trust. Extraction never promotes; only a current engine-owned check binding or, once signatures are enabled, a different authenticated verifier principal can do that.
+- The one thing agents can't do is manufacture trust. Extraction never promotes; only a current engine-owned check binding or a valid signature from a different authenticated verifier principal can do that.
 
 An earlier version of this engine demanded format compliance from agents. In its first real fleet test, agents drifted into shorthand, the orchestrator escalated format demands, and the whole run collapsed into "no receipts required". That failure is preserved in the test suite as the wreckage it was, and the engine was rebuilt around accepting it: [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) replays real broken lane output from that night.
 

@@ -102,8 +102,8 @@
         "source_id": { "type": "string", "minLength": 1 },
         "path": { "type": "string", "minLength": 1 },
         "kind": { "type": "string", "minLength": 1 },
-        "hash": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
-        "hash_alg": { "type": "string", "enum": ["fnv1a-64"] },
+        "hash": { "type": "string", "pattern": "^(?:[0-9a-f]{16}|[0-9a-f]{64})$" },
+        "hash_alg": { "type": "string", "enum": ["fnv1a-64", "blake3-256"] },
         "hash_basis": { "type": "string", "enum": ["content", "label", "git"] },
         "span": { "type": ["string", "null"] },
         "observed_at": { "type": "string", "minLength": 1 }

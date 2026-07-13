@@ -23,7 +23,7 @@ fn init_scaffolds_a_finishable_run() {
     let repo_root = std::env::temp_dir().join(format!("receipts-init-root-{nanos}"));
     fs::create_dir_all(&repo_root).expect("create fake repo root");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_receipts-core"))
+    let output = Command::new(env!("CARGO_BIN_EXE_receipts"))
         .arg("init")
         .arg(&dir)
         .arg("--repo-root")

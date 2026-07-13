@@ -56,7 +56,7 @@ function runNode(args, options = {}) {
 }
 
 function coreBin(args) {
-  return spawnSync("cargo", ["run", "--quiet", "--bin", "receipts-core", "--", ...args], {
+  return spawnSync("cargo", ["run", "--quiet", "--bin", "receipts", "--", ...args], {
     cwd: compilerDir,
     encoding: "utf8",
     shell: process.platform === "win32",

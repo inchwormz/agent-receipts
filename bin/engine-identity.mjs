@@ -110,7 +110,7 @@ function verifyManifest(binaryPath, manifestPath, expected) {
 }
 
 function platformBinaryName() {
-  return process.platform === "win32" ? "receipts-core.exe" : "receipts-core";
+  return process.platform === "win32" ? "receipts.exe" : "receipts";
 }
 
 function sourceEngine(rootPath, env) {
@@ -125,7 +125,7 @@ function sourceEngine(rootPath, env) {
   const expected = expectedSourceIdentity(rootPath, env);
   const build = spawnSync(
     "cargo",
-    ["build", "--locked", "--release", "--manifest-path", cargoManifest, "--bin", "receipts-core"],
+    ["build", "--locked", "--release", "--manifest-path", cargoManifest, "--bin", "receipts"],
     {
       cwd: rootPath,
       encoding: "utf8",

@@ -104,3 +104,19 @@ The highest-risk assumption is that current green tests measure the shipped path
 - **Verified final Rust result:** isolated `cargo test --locked` passed **57 tests total** (49 library + 1 determinism + 1 init + 4 argv + 2 compatibility); formatter check and `git diff --check` passed.
 - **Calibration remains 0 independently adjudicated outcomes.** No false-green probability or reliability score is eligible for presentation.
 - Next: commit Stage 1 as one logical unit, re-verify the committed engine identity, then begin Stage 2 cryptographic signing and the single-engine migration.
+
+### 2026-07-14 — Stage 2 cryptographic single-engine checkpoint
+
+- **Verified one authority:** new execution records are strict signed V2 envelopes in the existing `receipts/receipts.jsonl`; the rejected parallel-sidecar design was removed. Frozen V1 FNV lines remain byte-compatible and always load as `legacy_weak`; a V1 line after V2 is a fail-closed downgrade.
+- **Verified signed binding:** BLAKE3-256 and Ed25519 cover run ID, record kind, sequence, typed previous digest, frozen payload and artifact digests, executor public key/fingerprint, binary digest, build commit, dependency-lock digest, protocol, OS, and architecture. Digest length alone never assigns integrity.
+- **Verified journal adversaries:** payload/signature edits, an unsigned random 64-character digest, cross-run replay, and signed-tail truncation all fail for their named hash, signature, run-binding, or pinned-head reason.
+- **Verified artifacts:** new stdout/stderr artifacts use BLAKE3-256 and are required, regular non-symlink files whose bytes are re-hashed before compile or report consumption. Byte tampering fails closed.
+- **Verified executor identity:** a local Ed25519 key is generated outside repositories, protected by user-only permissions, and audited by a sign/verify challenge. `receipts doctor` also verifies executable/build/lock/platform identity, schema support, and `.receipts/checks.toml`; unresolved model metadata stays explicitly `unavailable` and cannot receive a model score.
+- **Verified privacy boundary:** `receipts project-public` recompiles current disk state and constructs a deterministic aggregate from a fixed allowlist. The fixture was byte-stable and omitted prompts, stdout, tokens, repository URLs, source IDs, commands, and absolute paths.
+- **Verified single Rust product path:** the binary is now named `receipts`. Rust owns ingest, run/check/diff, compile, synthesis, gate, resolve, reports, briefs, absorb/conclude composites, doctor, public projection, and readiness. The shipped Node file is a small npm dispatcher/identity launcher; legacy `.mjs` implementations are not packaged or reachable from product commands.
+- **Verified direct-build identity:** repository Cargo builds derive exact Git HEAD and Cargo.lock SHA-256 when explicit build variables are absent; unresolved identity still refuses to sign.
+- **Verified full compatibility:** `npm run test:node` passed **86/86 Node tests** after the last engine migration change.
+- **Verified full Rust:** isolated `cargo test --locked` passed **58 tests total** (50 library + 1 determinism + 1 init + 4 argv + 2 legacy/schema compatibility).
+- **Verified packaged checkout:** npm tarball contained 54 files and no trust-bearing scripts; install, `doctor`, and Rust `ready` passed from `C:\Users\johnr\AppData\Local\Temp\agent-receipts-stage2-package-20260714105931` with binary BLAKE3 `4b3dc80b24eb028d654f36fdffa3be1cabf8b2dfc84cc8eefbe798811ed4f7f4`.
+- **Threat boundary documented:** signatures establish executor continuity and post-hoc tamper evidence; they do not prove semantic truth, create verifier independence, or defend a host compromised while the engine runs.
+- Next: commit Stage 2 as one logical unit, verify the committed binary identity/readiness, then add exact model/session capture and independently adjudicated signed outcomes.

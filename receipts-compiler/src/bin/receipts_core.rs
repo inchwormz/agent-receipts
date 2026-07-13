@@ -14,7 +14,7 @@ const DEPENDENCY_LOCK_DIGEST: &str = env!("RECEIPTS_LOCK_DIGEST");
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("receipts-core: {error}");
+        eprintln!("receipts: {error}");
         std::process::exit(1);
     }
 }
@@ -35,7 +35,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Ok(())
         }
         "--version" | "-V" | "version" => {
-            println!("receipts-core {VERSION}");
+            println!("receipts {VERSION}");
             Ok(())
         }
         "identity" => {
@@ -51,6 +51,61 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })
             );
             Ok(())
+        }
+        "doctor" => {
+            let rest: Vec<String> = args.collect();
+            let repo_root = parse_flag_value(&rest, "--repo-root")
+                .map(PathBuf::from)
+                .unwrap_or(std::env::current_dir()?);
+            let report = receipts_core::compiler::doctor::run_doctor(&repo_root);
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.ok {
+                Ok(())
+            } else {
+                Err("doctor found one or more fail-closed installation problems".into())
+            }
+        }
+        "project-public" => {
+            let rest: Vec<String> = args.collect();
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir")
+                    .ok_or("`project-public` requires --run-dir <dir>")?,
+            );
+            let out = PathBuf::from(
+                parse_flag_value(&rest, "--out").ok_or("`project-public` requires --out <file>")?,
+            );
+            preflight_run_dir(&run_dir)?;
+            receipts_core::compiler::privacy::write_public_projection(&run_dir, &out)?;
+            println!("public projection written: {}", out.display());
+            Ok(())
+        }
+        "synthesize" => {
+            let rest: Vec<String> = args.collect();
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir")
+                    .ok_or("`synthesize` requires --run-dir <dir>")?,
+            );
+            let summary = parse_flag_value(&rest, "--summary")
+                .ok_or("`synthesize` requires --summary <text>")?;
+            preflight_run_dir(&run_dir)?;
+            record_synthesis(&run_dir, &summary)?;
+            let report = compile_run_dir(&run_dir)?;
+            println!(
+                "synthesis recorded; packet={}",
+                report.packet_path.display()
+            );
+            Ok(())
+        }
+        "gate" => {
+            let run_dir = parse_run_dir(args.collect())?;
+            preflight_run_dir(&run_dir)?;
+            let report = receipts_core::compiler::gate::run_gate(&run_dir)?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            if report.ok {
+                Ok(())
+            } else {
+                Err("strict gate failed".into())
+            }
         }
         "init" => {
             let rest: Vec<String> = args.collect();
@@ -68,6 +123,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let rest: Vec<String> = args.collect();
             check_with_binding(rest)
         }
+        "ingest" => {
+            let rest: Vec<String> = args.collect();
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir").ok_or("`ingest` requires --run-dir <dir>")?,
+            );
+            let lane =
+                parse_flag_value(&rest, "--lane").ok_or("`ingest` requires --lane <lane>")?;
+            let agent_id =
+                parse_flag_value(&rest, "--agent-id").ok_or("`ingest` requires --agent-id <id>")?;
+            let from = PathBuf::from(
+                parse_flag_value(&rest, "--from").ok_or("`ingest` requires --from <file>")?,
+            );
+            preflight_run_dir(&run_dir)?;
+            let report = receipts_core::compiler::ingest::ingest_subagent(
+                &run_dir,
+                &lane,
+                &agent_id,
+                &from,
+                &iso_now(),
+                &chrono_like_stamp(),
+            )?;
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        "absorb" => absorb_lane(args.collect()),
+        "conclude" => conclude_pass(args.collect()),
+        "ready" => run_readiness(),
         "diff" => {
             let rest: Vec<String> = args.collect();
             diff_with_receipt(rest)
@@ -109,19 +191,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             Ok(())
         }
-        other => Err(format!("unknown command `{other}` — try `receipts-core --help`").into()),
+        other => Err(format!("unknown command `{other}` — try `receipts --help`").into()),
     }
 }
 
 fn print_help() {
     println!(
-        "receipts-core {VERSION} — deterministic packet compiler for AI agent runs
+        "receipts {VERSION} — deterministic packet compiler for AI agent runs
 
 USAGE:
-    receipts-core <COMMAND> [ARGS]
+    receipts <COMMAND> [ARGS]
 
 COMMANDS:
     identity                        Print the machine-readable engine identity
+    doctor [--repo-root <path>]     Verify engine, executor key, schemas, check manifest,
+                                    and model/runtime metadata availability
+    project-public --run-dir <dir> --out <file>
+                                    Build a deterministic allowlist-only public projection
+    synthesize --run-dir <dir> --summary <text>
+                                    Record the main-agent synthesis and advance the pass
+    gate --run-dir <dir>            Recompile and apply the categorical strict gate
     init <dir> [--repo-root <path>]   Scaffold a run directory (repo_root defaults to cwd)
     run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] -- <command...>
     run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] --exe <program> [--arg <token>]...
@@ -130,6 +219,13 @@ COMMANDS:
     check --run-dir <dir> --id <check-id>
                             Execute an engine-declared .receipts/checks.toml check
                             and bind it to exact subject, lock, environment, and claims
+    ingest --run-dir <dir> --lane <lane> --agent-id <id> --from <file>
+                            Quarantine and normalize a natural-prose or JSONL lane result
+    absorb --run-dir <dir> --lane <lane> --agent-id <id> --from <file> [--no-diff]
+                            Ingest, mint a work receipt, and recompile in one motion
+    conclude --run-dir <dir> --synthesis <text> [--skip-report]
+                            Synthesize, gate, report, and print the next brief
+    ready                   Exercise the installed engine end to end
     diff --run-dir <dir> [--note <text>] [--patch]
                             Mint a WORK receipt: what changed in repo_root's tree
                             (numstat summary by default; --patch embeds the full
@@ -170,7 +266,7 @@ fn parse_run_dir(args: Vec<String>) -> Result<PathBuf, Box<dyn std::error::Error
                 .ok_or_else(|| "`--run-dir` requires a path".into());
         }
     }
-    Err("missing required `--run-dir <path>` — run `receipts-core --help` for usage".into())
+    Err("missing required `--run-dir <path>` — run `receipts --help` for usage".into())
 }
 
 fn parse_path_arg(args: Vec<String>, cmd: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -186,12 +282,237 @@ fn parse_path_arg(args: Vec<String>, cmd: &str) -> Result<PathBuf, Box<dyn std::
         }
         return Ok(PathBuf::from(arg));
     }
-    Err(format!("`{cmd}` requires a directory path — try `receipts-core {cmd} my-run`").into())
+    Err(format!("`{cmd}` requires a directory path — try `receipts {cmd} my-run`").into())
 }
 
 fn parse_flag_value(args: &[String], flag: &str) -> Option<String> {
     let index = args.iter().position(|arg| arg == flag)?;
     args.get(index + 1).cloned()
+}
+
+fn run_self(args: &[String]) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+    Ok(std::process::Command::new(std::env::current_exe()?)
+        .args(args)
+        .output()?)
+}
+
+fn absorb_lane(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let run_dir =
+        parse_flag_value(&args, "--run-dir").ok_or("`absorb` requires --run-dir <dir>")?;
+    let lane = parse_flag_value(&args, "--lane").ok_or("`absorb` requires --lane <lane>")?;
+    let agent_id =
+        parse_flag_value(&args, "--agent-id").ok_or("`absorb` requires --agent-id <id>")?;
+    let from = parse_flag_value(&args, "--from").ok_or("`absorb` requires --from <file>")?;
+    let ingest = run_self(&[
+        "ingest".to_string(),
+        "--run-dir".to_string(),
+        run_dir.clone(),
+        "--lane".to_string(),
+        lane.clone(),
+        "--agent-id".to_string(),
+        agent_id,
+        "--from".to_string(),
+        from,
+    ])?;
+    if !ingest.status.success() {
+        return Err(format!(
+            "absorb ingest failed: {}",
+            String::from_utf8_lossy(&ingest.stderr).trim()
+        )
+        .into());
+    }
+    let ingest_report: serde_json::Value = serde_json::from_slice(&ingest.stdout)?;
+    let mut work_receipt = serde_json::Value::Null;
+    if !args.iter().any(|arg| arg == "--no-diff") {
+        let diff = run_self(&[
+            "diff".to_string(),
+            "--run-dir".to_string(),
+            run_dir.clone(),
+            "--note".to_string(),
+            format!("post-lane {lane}"),
+        ])?;
+        if diff.status.success() {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&diff.stdout) {
+                work_receipt = value
+                    .get("receipt")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+            }
+        } else {
+            eprintln!(
+                "receipts absorb: warning: diff failed: {}",
+                String::from_utf8_lossy(&diff.stderr).trim()
+            );
+        }
+    }
+    let compile = run_self(&["compile".to_string(), "--run-dir".to_string(), run_dir])?;
+    if !compile.status.success() {
+        return Err(format!(
+            "absorb compile failed: {}",
+            String::from_utf8_lossy(&compile.stderr).trim()
+        )
+        .into());
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "ok": true,
+            "lane": lane,
+            "ingest": ingest_report,
+            "work_receipt": work_receipt,
+            "compiled": true,
+        })
+    );
+    Ok(())
+}
+
+fn conclude_pass(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let run_dir =
+        parse_flag_value(&args, "--run-dir").ok_or("`conclude` requires --run-dir <dir>")?;
+    let synthesis =
+        parse_flag_value(&args, "--synthesis").ok_or("`conclude` requires --synthesis <text>")?;
+    let synthesize = run_self(&[
+        "synthesize".to_string(),
+        "--run-dir".to_string(),
+        run_dir.clone(),
+        "--summary".to_string(),
+        synthesis,
+    ])?;
+    if !synthesize.status.success() {
+        return Err(format!(
+            "conclude synthesis failed: {}",
+            String::from_utf8_lossy(&synthesize.stderr).trim()
+        )
+        .into());
+    }
+    let gate = run_self(&["gate".to_string(), "--run-dir".to_string(), run_dir.clone()])?;
+    if !args.iter().any(|arg| arg == "--skip-report") {
+        let report = run_self(&[
+            "report".to_string(),
+            "--run-dir".to_string(),
+            run_dir.clone(),
+        ])?;
+        if !report.status.success() {
+            eprintln!(
+                "receipts conclude: warning: report failed: {}",
+                String::from_utf8_lossy(&report.stderr).trim()
+            );
+        }
+    }
+    let next = run_self(&["next".to_string(), "--run-dir".to_string(), run_dir])?;
+    if next.status.success() {
+        print!("{}", String::from_utf8_lossy(&next.stdout));
+    } else {
+        eprintln!(
+            "receipts conclude: warning: next failed: {}",
+            String::from_utf8_lossy(&next.stderr).trim()
+        );
+    }
+    if !gate.status.success() {
+        std::process::exit(gate.status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
+struct ReadinessFixture(PathBuf);
+
+impl Drop for ReadinessFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn run_readiness() -> Result<(), Box<dyn std::error::Error>> {
+    let stamp = chrono_like_stamp();
+    let root = std::env::current_dir()?;
+    let fixture = ReadinessFixture(std::env::temp_dir().join(format!(
+        "agent-receipts-readiness-{}-{stamp}",
+        std::process::id()
+    )));
+    let run_dir = fixture.0.join("run");
+    let init = run_self(&[
+        "init".to_string(),
+        run_dir.display().to_string(),
+        "--repo-root".to_string(),
+        root.display().to_string(),
+    ])?;
+    if !init.status.success() {
+        return Err(format!(
+            "readiness init failed: {}",
+            String::from_utf8_lossy(&init.stderr).trim()
+        )
+        .into());
+    }
+    let lane = fixture.0.join("lane.md");
+    fs::write(
+        &lane,
+        "```receipts-evidence-jsonl\n{\"id\":\"ev-readiness\",\"kind\":\"observation\",\"summary\":\"README is present\",\"source_ids\":[\"file:README.md:1\"]}\n```\n",
+    )?;
+    let ingest = run_self(&[
+        "ingest".to_string(),
+        "--run-dir".to_string(),
+        run_dir.display().to_string(),
+        "--lane".to_string(),
+        "readiness".to_string(),
+        "--agent-id".to_string(),
+        "readiness-engine".to_string(),
+        "--from".to_string(),
+        lane.display().to_string(),
+    ])?;
+    if !ingest.status.success() {
+        return Err(format!(
+            "readiness ingest failed: {}",
+            String::from_utf8_lossy(&ingest.stderr).trim()
+        )
+        .into());
+    }
+    let current = std::env::current_exe()?;
+    let execution = run_self(&[
+        "run".to_string(),
+        "--run-dir".to_string(),
+        run_dir.display().to_string(),
+        "--label".to_string(),
+        "test:readiness-identity".to_string(),
+        "--exe".to_string(),
+        current.display().to_string(),
+        "--arg".to_string(),
+        "identity".to_string(),
+    ])?;
+    if !execution.status.success() {
+        return Err(format!(
+            "readiness signed execution failed: {}",
+            String::from_utf8_lossy(&execution.stderr).trim()
+        )
+        .into());
+    }
+    let synthesis = run_self(&[
+        "synthesize".to_string(),
+        "--run-dir".to_string(),
+        run_dir.display().to_string(),
+        "--summary".to_string(),
+        "Readiness consumed the source-backed fixture.".to_string(),
+    ])?;
+    if !synthesis.status.success() {
+        return Err(format!(
+            "readiness synthesis failed: {}",
+            String::from_utf8_lossy(&synthesis.stderr).trim()
+        )
+        .into());
+    }
+    let gate = std::process::Command::new(std::env::current_exe()?)
+        .args(["gate", "--run-dir", run_dir.to_string_lossy().as_ref()])
+        .env("RECEIPTS_MIN_AGENT_COVERAGE", "1")
+        .output()?;
+    if !gate.status.success() {
+        return Err(format!(
+            "readiness gate failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&gate.stdout).trim(),
+            String::from_utf8_lossy(&gate.stderr).trim()
+        )
+        .into());
+    }
+    println!("receipts readiness: passed");
+    Ok(())
 }
 
 fn charset_ok(value: &str) -> bool {
@@ -235,7 +556,7 @@ fn resolve_worklist_item(args: Vec<String>) -> Result<(), Box<dyn std::error::Er
             reason,
             cite,
             resolved_at: iso_now(),
-            writer: format!("receipts-core/{VERSION}"),
+            writer: format!("receipts/{VERSION}"),
             prev_record_hash: String::new(),
             record_hash: String::new(),
         },
@@ -333,7 +654,7 @@ fn run_with_receipt(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
             tree_after,
             lane,
             agent_id,
-            writer: format!("receipts-core/{VERSION}"),
+            writer: format!("receipts/{VERSION}"),
             prev_record_hash: String::new(),
             record_hash: String::new(),
         },
@@ -376,7 +697,7 @@ fn check_with_binding(args: Vec<String>) -> Result<(), Box<dyn std::error::Error
         &run_dir,
         &repo_root,
         check,
-        &format!("receipts-core/{VERSION}"),
+        &format!("receipts/{VERSION}"),
     )?;
     println!("{}", serde_json::to_string(&attempt)?);
     if attempt.outcome != "passed" {
@@ -651,7 +972,7 @@ fn diff_with_receipt(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>
             tree_after: tree,
             lane,
             agent_id,
-            writer: format!("receipts-core/{VERSION}"),
+            writer: format!("receipts/{VERSION}"),
             prev_record_hash: String::new(),
             record_hash: String::new(),
         },
@@ -689,6 +1010,120 @@ fn preflight_run_dir(run_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    Ok(())
+}
+
+fn record_synthesis(run_dir: &Path, summary: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err("synthesis summary must not be empty".into());
+    }
+    // Validate and refresh the exact state being consumed before recording
+    // that it was synthesized.
+    compile_run_dir(run_dir)?;
+    let stamp = chrono_like_stamp();
+    let observed_at = iso_now();
+    let raw_name = format!("codex-synthesis-{stamp}.md");
+    let raw_source_id = format!("raw:{raw_name}");
+    fs::write(
+        run_dir.join("raw").join(&raw_name),
+        format!("# Codex Synthesis {stamp}\n\n{summary}\n"),
+    )?;
+
+    let evidence_path = run_dir.join("worker-results/evidence.jsonl");
+    let mut evidence_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(evidence_path)?;
+    serde_json::to_writer(
+        &mut evidence_file,
+        &serde_json::json!({
+            "id": format!("ev-codex-synthesis-{stamp}"),
+            "kind": "codex-synthesis",
+            "summary": summary,
+            "source_ids": [raw_source_id.clone()],
+            "observed_at": observed_at,
+        }),
+    )?;
+    use std::io::Write as _;
+    evidence_file.write_all(b"\n")?;
+    evidence_file.flush()?;
+
+    let findings_path = run_dir.join("verifier-results/findings.jsonl");
+    let mut findings: Vec<serde_json::Value> = fs::read_to_string(&findings_path)?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str)
+        .collect::<Result<_, _>>()?;
+    let mut consumed_pending = false;
+    for finding in &mut findings {
+        if finding.get("id").and_then(serde_json::Value::as_str)
+            != Some("vf-codex-synthesis-pending")
+        {
+            continue;
+        }
+        consumed_pending = true;
+        let object = finding
+            .as_object_mut()
+            .ok_or("verifier finding must be an object")?;
+        object.insert(
+            "summary".to_string(),
+            serde_json::Value::String(format!("Codex synthesis consumed packet state: {summary}")),
+        );
+        object.insert(
+            "status".to_string(),
+            serde_json::Value::String("passed".to_string()),
+        );
+        object.insert("verifier_score".to_string(), serde_json::json!(0.9));
+        object.insert(
+            "finding_kind".to_string(),
+            serde_json::Value::String("synthesis".to_string()),
+        );
+        let mut source_ids: Vec<String> = object
+            .get("source_ids")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if !source_ids.contains(&raw_source_id) {
+            source_ids.push(raw_source_id.clone());
+        }
+        object.insert("source_ids".to_string(), serde_json::json!(source_ids));
+    }
+    if !consumed_pending {
+        findings.push(serde_json::json!({
+            "id": format!("vf-codex-synthesis-{stamp}"),
+            "summary": format!("Codex synthesis consumed packet state: {summary}"),
+            "status": "passed",
+            "verifier_score": 0.9,
+            "source_ids": [raw_source_id],
+            "finding_kind": "synthesis",
+        }));
+    }
+    let mut findings_bytes = Vec::new();
+    for finding in findings {
+        serde_json::to_writer(&mut findings_bytes, &finding)?;
+        findings_bytes.push(b'\n');
+    }
+    fs::write(findings_path, findings_bytes)?;
+
+    let manifest_path = run_dir.join("manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+    let current = manifest
+        .get("pass_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("pass-0001");
+    let next = current
+        .strip_prefix("pass-")
+        .and_then(|number| number.parse::<u64>().ok())
+        .map(|number| format!("pass-{:04}", number + 1))
+        .unwrap_or_else(|| "pass-0002".to_string());
+    manifest["pass_id"] = serde_json::Value::String(next);
+    let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+    manifest_bytes.push(b'\n');
+    fs::write(manifest_path, manifest_bytes)?;
     Ok(())
 }
 

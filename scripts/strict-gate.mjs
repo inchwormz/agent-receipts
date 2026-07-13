@@ -191,9 +191,9 @@ function resolveSourcePath(runDir, sourcePath) {
 }
 
 function checkHashAlg(source, errors, prefix) {
-  if (source.hash_alg && source.hash_alg !== "fnv1a-64") {
+  if (source.hash_alg && !["fnv1a-64", "blake3-256"].includes(source.hash_alg)) {
     errors.push(
-      `${prefix} source_ref ${source.source_id} uses unsupported hash_alg "${source.hash_alg}" (expected "fnv1a-64")`,
+      `${prefix} source_ref ${source.source_id} uses unsupported hash_alg "${source.hash_alg}" (expected fnv1a-64|blake3-256)`,
     );
   }
   // Require a hash for every source_ref regardless of kind. Previously the hash
@@ -203,9 +203,12 @@ function checkHashAlg(source, errors, prefix) {
     errors.push(
       `${prefix} source_ref ${source.source_id ?? "<unknown>"} is missing hash (required for every source_ref)`,
     );
-  } else if (!/^[0-9a-f]{16}$/.test(String(source.hash))) {
+  } else if (
+    (source.hash_alg === "blake3-256" && !/^[0-9a-f]{64}$/.test(String(source.hash))) ||
+    (source.hash_alg !== "blake3-256" && !/^[0-9a-f]{16}$/.test(String(source.hash)))
+  ) {
     errors.push(
-      `${prefix} source_ref ${source.source_id} hash "${source.hash}" is not a valid fnv1a-64 digest`,
+      `${prefix} source_ref ${source.source_id} hash "${source.hash}" does not match ${source.hash_alg ?? "fnv1a-64"}`,
     );
   }
 }

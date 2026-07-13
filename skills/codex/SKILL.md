@@ -68,7 +68,7 @@ receipts resolve --run-dir <d> --target <worklist-or-contradiction-id> --reason 
 
 ## Runtime boundary
 
-Codex is Prime. The local runtime (Rust `receipts-core` + the Node `receipts` CLI) is the body. Spawn lanes with Codex's own subagent mechanism; Prime reads the compiled brief and drill-down spans — never raw subagent chat as ground truth. This is a Codex skill, not a Claude batch runner — do not spawn Claude sessions from within it.
+Codex is Prime. The local runtime is the Rust `receipts` engine; npm supplies only its dispatcher. Spawn lanes with Codex's own subagent mechanism; Prime reads the compiled brief and drill-down spans — never raw subagent chat as ground truth. This is a Codex skill, not a Claude batch runner — do not spawn Claude sessions from within it.
 
 ## Troubleshooting
 

@@ -67,9 +67,15 @@ mod contract_tests {
             "sourceRef must require hash_alg"
         );
         assert_eq!(
-            parsed["$defs"]["sourceRef"]["properties"]["hash"]["pattern"], "^[0-9a-f]{16}$",
-            "sourceRef.hash must be pinned to fnv1a-64 digest shape"
+            parsed["$defs"]["sourceRef"]["properties"]["hash"]["pattern"],
+            "^(?:[0-9a-f]{16}|[0-9a-f]{64})$",
+            "sourceRef.hash must cover legacy FNV and BLAKE3-256 digest shapes"
         );
+        let hash_algs = parsed["$defs"]["sourceRef"]["properties"]["hash_alg"]["enum"]
+            .as_array()
+            .expect("hash_alg enum");
+        assert!(hash_algs.iter().any(|value| value == "fnv1a-64"));
+        assert!(hash_algs.iter().any(|value| value == "blake3-256"));
         assert!(
             parsed["$defs"]["haltSignal"]["required"]
                 .as_array()

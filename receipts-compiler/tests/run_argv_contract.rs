@@ -11,7 +11,7 @@ fn fresh_run(name: &str) -> PathBuf {
         "receipts-run-argv-{name}-{}-{nanos}",
         std::process::id()
     ));
-    let output = Command::new(env!("CARGO_BIN_EXE_receipts-core"))
+    let output = Command::new(env!("CARGO_BIN_EXE_receipts"))
         .args(["init", dir.to_string_lossy().as_ref()])
         .output()
         .expect("init run");
@@ -24,7 +24,7 @@ fn fresh_run(name: &str) -> PathBuf {
 }
 
 fn core_run(run_dir: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_receipts-core"))
+    Command::new(env!("CARGO_BIN_EXE_receipts"))
         .arg("run")
         .args(["--run-dir", run_dir.to_string_lossy().as_ref()])
         .args(args)
@@ -36,7 +36,8 @@ fn receipt_command(run_dir: &Path) -> Vec<String> {
     let journal = fs::read_to_string(run_dir.join("receipts/receipts.jsonl")).expect("journal");
     let row: serde_json::Value =
         serde_json::from_str(journal.lines().last().expect("receipt")).expect("receipt json");
-    row["cmd"]
+    let receipt = row.get("payload").unwrap_or(&row);
+    receipt["cmd"]
         .as_array()
         .expect("cmd array")
         .iter()

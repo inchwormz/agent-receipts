@@ -68,7 +68,7 @@ receipts resolve --run-dir <d> --target <worklist-or-contradiction-id> --reason 
 
 ## Runtime boundary
 
-Claude is Prime. The local runtime (Rust `receipts-core` + the Node `receipts` CLI) is the body. Spawn lanes with Claude Code's native Task tool; Prime reads the compiled brief and drill-down spans — never raw subagent chat as ground truth. Do not call `claude -p` or nest CLI sessions.
+Claude is Prime. The local runtime is the Rust `receipts` engine; npm supplies only its dispatcher. Spawn lanes with Claude Code's native Task tool; Prime reads the compiled brief and drill-down spans — never raw subagent chat as ground truth. Do not call `claude -p` or nest CLI sessions.
 
 ## Troubleshooting
 

@@ -150,7 +150,9 @@ test("absorb happy path: fenced lane record lands in evidence, mints a work:tree
   const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
   assert.ok(evidence.some((r) => r.id === "ev-absorb-claim"), "lane record must land in evidence.jsonl");
 
-  const receipts = readJsonl(path.join(runDir, "receipts", "receipts.jsonl"));
+  const receipts = readJsonl(path.join(runDir, "receipts", "receipts.jsonl")).map((line) =>
+    line.format_version === "2" ? { ...line.payload, record_hash: line.record_hash } : line,
+  );
   assert.ok(
     receipts.some((r) => r.label === "work:tree" && r.id === parsed.work_receipt),
     `a work:tree receipt matching the reported work_receipt id must exist; got ${JSON.stringify(receipts)}`,

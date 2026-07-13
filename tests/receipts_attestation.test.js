@@ -28,7 +28,7 @@ function freshRunDir(name) {
     JSON.stringify(
       {
         objective_id: `obj-rc-${stamp}`,
-        run_id: `run-rc-${stamp}`,
+        run_id: `run-rc-${stamp}-${name}`,
         branch_id: "main",
         pass_id: "pass-0002",
         created_at: new Date().toISOString(),
@@ -126,6 +126,14 @@ function readJsonl(file) {
     .map((line) => JSON.parse(line));
 }
 
+function readReceipts(file) {
+  return readJsonl(file).map((line) =>
+    line.format_version === "2"
+      ? { ...line.payload, record_hash: line.record_hash, envelope: line }
+      : line,
+  );
+}
+
 function ingestLane(runDir, lane, content) {
   const file = path.join(runDir, "raw", "subagents", `${lane}.md`);
   fs.writeFileSync(file, content, "utf8");
@@ -153,13 +161,13 @@ test("receipts run mints chained receipts and propagates the child exit code", (
   const fail = coreRun(runDir, "test:demo-fail", 3);
   assert.equal(fail.status, 3, `child exit code must propagate; got ${fail.status}`);
 
-  const journal = readJsonl(path.join(runDir, "receipts", "receipts.jsonl"));
+  const journal = readReceipts(path.join(runDir, "receipts", "receipts.jsonl"));
   assert.equal(journal.length, 2, "journal must contain both receipts");
   assert.equal(journal[0].id, "rcpt-0001");
   assert.equal(journal[0].exit_code, 0);
   assert.equal(journal[1].exit_code, 3);
   assert.equal(journal[1].prev_record_hash, journal[0].record_hash, "chain must link");
-  assert.ok(journal[0].stdout_hash.match(/^[0-9a-f]{16}$/));
+  assert.ok(journal[0].stdout_hash.match(/^[0-9a-f]{64}$/));
   const artifact = path.join(runDir, "receipts", "artifacts", `${journal[0].stdout_hash}.txt`);
   assert.ok(fs.existsSync(artifact), "stdout artifact must be stored content-addressed");
 });
@@ -184,7 +192,7 @@ test("receipt events stay separate from claims with typed outcomes", (t) => {
     {
       receipt_id: "rcpt-0001",
       label: "test:demo-pass",
-      integrity: "hash_verified",
+      integrity: "signed",
       outcome: "passed",
       exit_code: 0,
       attempts_for_label: 1,
@@ -591,11 +599,11 @@ test("work receipts remain events and confer nothing on claims citing them", (t)
   // Mint a work receipt via the real subcommand (repo_root is this repo).
   const diff = spawnSync(
     "cargo",
-    ["run", "--quiet", "--bin", "receipts-core", "--", "diff", "--run-dir", runDir, "--note", "phase-1-fixture"],
+    ["run", "--quiet", "--bin", "receipts", "--", "diff", "--run-dir", runDir, "--note", "phase-1-fixture"],
     { cwd: compilerDir, encoding: "utf8", shell: process.platform === "win32" },
   );
   assert.equal(diff.status, 0, `receipts diff must succeed: ${diff.stderr}`);
-  const journal = readJsonl(path.join(runDir, "receipts", "receipts.jsonl"));
+  const journal = readReceipts(path.join(runDir, "receipts", "receipts.jsonl"));
   assert.equal(journal[0].label, "work:tree", "work receipts carry the constant label");
 
   // A lane tries to ride the work receipt: cites the label AND the id.
@@ -637,8 +645,8 @@ test("work receipts remain events and confer nothing on claims citing them", (t)
     env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" },
   });
   assert.ok(
-    gate.stdout.includes("summary-only evidence") && gate.stdout.includes("ev-rider"),
-    `rider must be flagged summary-only despite citing the work receipt; got ${gate.stdout}`,
+    gate.stdout.includes("lack a content-hashed file source_ref") && gate.stdout.includes("ev-rider"),
+    `rider must be denied semantic provenance despite citing the work receipt; got ${gate.stdout}`,
   );
 });
 
@@ -653,8 +661,8 @@ test("a tampered journal breaks the chain and fails compile", (t) => {
   const driver = runNode(["driver.mjs", "--run-dir", runDir]);
   assert.notEqual(driver.status, 0, "compile must fail on a tampered journal");
   assert.ok(
-    `${driver.stdout}\n${driver.stderr}`.includes("chain broken"),
-    `compile must name the broken chain; got ${driver.stderr}`,
+    `${driver.stdout}\n${driver.stderr}`.includes("signed receipt record hash mismatch"),
+    `compile must name the signed record mismatch; got ${driver.stderr}`,
   );
 });
 
@@ -684,4 +692,110 @@ test("a passing receipt label cannot claim semantic verifier coverage", (t) => {
     gate.stdout.includes("summary-only verifier findings") && gate.stdout.includes("vf-label-backed"),
     `unbound receipt labels must not create semantic coverage; got ${gate.stdout}`,
   );
+});
+
+test("new receipt records use BLAKE3 and an Ed25519 executor signature", (t) => {
+  const runDir = freshRunDir("signed-receipt");
+  t.after(() => removeDir(runDir));
+  assert.equal(coreRun(runDir, "test:signed", 0).status, 0);
+  const signedPath = path.join(runDir, "receipts", "receipts.jsonl");
+  const signed = readJsonl(signedPath);
+  const receipt = readReceipts(signedPath)[0];
+  assert.match(receipt.record_hash, /^[0-9a-f]{64}$/, "new record hash must be BLAKE3-256");
+  assert.equal(signed.length, 1, "the one receipt journal must contain one signed canonical envelope");
+  assert.equal(signed[0].format_version, "2");
+  assert.equal(signed[0].record_kind, "execution_receipt");
+  assert.equal(signed[0].payload.id, receipt.id);
+  assert.equal(signed[0].run_id, JSON.parse(fs.readFileSync(path.join(runDir, "manifest.json"), "utf8")).run_id);
+  assert.equal(signed[0].sequence, 1);
+  assert.deepEqual(signed[0].previous, { hash_alg: "genesis", digest: "GENESIS" });
+  assert.equal(signed[0].hash_alg, "blake3-256");
+  assert.match(signed[0].executor.public_key, /^[0-9a-f]{64}$/);
+  assert.match(signed[0].executor.key_fingerprint, /^[0-9a-f]{64}$/);
+  assert.match(signed[0].signature, /^[0-9a-f]{128}$/);
+
+  signed[0].signature = `${signed[0].signature[0] === "0" ? "1" : "0"}${signed[0].signature.slice(1)}`;
+  fs.writeFileSync(signedPath, `${JSON.stringify(signed[0])}\n`, "utf8");
+  const compile = coreCommand(["compile", "--run-dir", runDir]);
+  assert.notEqual(compile.status, 0, "signature tampering must fail closed");
+  assert.ok(`${compile.stdout}\n${compile.stderr}`.includes("signature verification failed"));
+});
+
+test("a random 64-character digest without a verified envelope is never signed", (t) => {
+  const runDir = freshRunDir("unsigned-64");
+  t.after(() => removeDir(runDir));
+  assert.equal(coreRun(runDir, "test:unsigned-64", 0).status, 0);
+  const journalPath = path.join(runDir, "receipts", "receipts.jsonl");
+  const envelope = readJsonl(journalPath)[0];
+  const forgedLegacy = {
+    ...envelope.payload,
+    record_hash: "a".repeat(64),
+  };
+  fs.writeFileSync(journalPath, `${JSON.stringify(forgedLegacy)}\n`, "utf8");
+  fs.rmSync(path.join(runDir, "receipts", "signed-head.json"));
+
+  const compile = coreCommand(["compile", "--run-dir", runDir]);
+  assert.notEqual(compile.status, 0, "digest shape alone must never acquire signed integrity");
+  assert.ok(
+    `${compile.stdout}\n${compile.stderr}`.includes("does not match legacy content hash"),
+    `${compile.stdout}\n${compile.stderr}`,
+  );
+});
+
+test("a signed receipt copied to another run fails its run binding", (t) => {
+  const sourceRun = freshRunDir("signed-source-run");
+  const targetRun = freshRunDir("signed-target-run");
+  t.after(() => removeDir(sourceRun));
+  t.after(() => removeDir(targetRun));
+  assert.equal(coreRun(sourceRun, "test:run-bound", 0).status, 0);
+  fs.cpSync(path.join(sourceRun, "receipts"), path.join(targetRun, "receipts"), {
+    recursive: true,
+  });
+
+  const compile = coreCommand(["compile", "--run-dir", targetRun]);
+  assert.notEqual(compile.status, 0, "cross-run replay must fail closed");
+  assert.ok(`${compile.stdout}\n${compile.stderr}`.includes("run binding mismatch"));
+});
+
+test("truncating a signed journal suffix disagrees with its pinned head", (t) => {
+  const runDir = freshRunDir("signed-tail-truncation");
+  t.after(() => removeDir(runDir));
+  assert.equal(coreRun(runDir, "test:tail-1", 0).status, 0);
+  assert.equal(coreRun(runDir, "test:tail-2", 0).status, 0);
+  const journalPath = path.join(runDir, "receipts", "receipts.jsonl");
+  const lines = fs.readFileSync(journalPath, "utf8").trim().split(/\r?\n/);
+  fs.writeFileSync(journalPath, `${lines[0]}\n`, "utf8");
+
+  const compile = coreCommand(["compile", "--run-dir", runDir]);
+  assert.notEqual(compile.status, 0, "signed suffix deletion must fail closed");
+  assert.ok(
+    `${compile.stdout}\n${compile.stderr}`.includes("head does not match the terminal record"),
+    `${compile.stdout}\n${compile.stderr}`,
+  );
+});
+
+test("new artifacts use BLAKE3 and byte tampering fails compile", (t) => {
+  const runDir = freshRunDir("artifact-tamper-v2");
+  t.after(() => removeDir(runDir));
+  const run = coreCommand([
+    "run",
+    "--run-dir",
+    runDir,
+    "--label",
+    "test:artifact-v2",
+    "--exe",
+    process.execPath,
+    "--arg",
+    "-e",
+    "--arg",
+    "process.stdout.write('artifact-v2-body')",
+  ]);
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  const receipt = readReceipts(path.join(runDir, "receipts", "receipts.jsonl"))[0];
+  assert.match(receipt.stdout_hash, /^[0-9a-f]{64}$/, "new artifacts must use BLAKE3-256");
+  const artifact = path.join(runDir, "receipts", "artifacts", `${receipt.stdout_hash}.txt`);
+  fs.writeFileSync(artifact, "tampered artifact bytes", "utf8");
+  const compile = coreCommand(["compile", "--run-dir", runDir]);
+  assert.notEqual(compile.status, 0);
+  assert.ok(`${compile.stdout}\n${compile.stderr}`.includes("artifact digest mismatch"));
 });

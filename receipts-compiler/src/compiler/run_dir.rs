@@ -6,7 +6,7 @@ use crate::compiler::checks::{
 use crate::compiler::contradictions::detect_auto_contradictions;
 use crate::compiler::journal::append_decision_log;
 use crate::compiler::packets::{CompilerInputBundle, build_next_pass_packet};
-use crate::compiler::receipts::load_verified_receipts;
+use crate::compiler::receipts::{ReceiptVerification, load_verified_receipt_journal};
 use crate::compiler::resolutions::{ResolutionRecord, load_verified_resolutions};
 use crate::compiler::signals::detect_recurring_failure_patterns;
 use crate::compiler::snapshot::build_snapshot;
@@ -66,7 +66,8 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
     // runtime-authored evidence record, and EXEC receipt outcomes attest or
     // refute claims below. WORK receipts (label work:tree) attest tree state
     // only - they are partitioned out of every claim-attestation path.
-    let receipts = load_verified_receipts(run_dir)?;
+    let receipt_journal = load_verified_receipt_journal(run_dir)?;
+    let receipts = receipt_journal.records;
     let check_attempts = load_verified_attempts(run_dir)?;
     verify_attempt_receipts(&check_attempts, &receipts)?;
     let check_histories = build_check_histories(&check_attempts);
@@ -75,10 +76,19 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
             receipt.label.as_deref() == Some(crate::compiler::receipts::WORK_LABEL)
         });
     let exec_receipts: Vec<ReceiptRecord> = exec_receipts.into_iter().cloned().collect();
-    let receipt_events = build_receipt_events(&receipts, &check_attempts);
+    let receipt_events =
+        build_receipt_events(&receipts, &receipt_journal.verification, &check_attempts);
 
     let mut sources = raw_sources.clone();
-    sources.extend(receipts.iter().map(receipt_source_ref));
+    sources.extend(receipts.iter().map(|receipt| {
+        receipt_source_ref(
+            receipt,
+            receipt_journal
+                .verification
+                .get(&receipt.id)
+                .expect("verified receipt must retain trust metadata"),
+        )
+    }));
     sources.extend(evidence_declared_sources(&worker_evidence));
     sources.extend(verifier_declared_sources(&verifier_findings));
     sources.extend(evidence_sources(&worker_evidence));
@@ -724,13 +734,13 @@ const NON_FACT_KINDS: &[&str] = &[
 
 /// One packet source per receipt: content-hashed (the record_hash covers the
 /// receipt's full content), span = receipt id inside the journal.
-fn receipt_source_ref(receipt: &ReceiptRecord) -> SourceRef {
+fn receipt_source_ref(receipt: &ReceiptRecord, verification: &ReceiptVerification) -> SourceRef {
     SourceRef {
         source_id: format!("receipt:{}", receipt.id),
         path: "receipts/receipts.jsonl".to_string(),
         kind: "receipt".to_string(),
         hash: receipt.record_hash.clone(),
-        hash_alg: RECEIPTS_HASH_ALG.to_string(),
+        hash_alg: verification.hash_alg.to_string(),
         hash_basis: Some("content".to_string()),
         span: Some(receipt.id.clone()),
         observed_at: receipt.ended_at.clone(),
@@ -739,6 +749,7 @@ fn receipt_source_ref(receipt: &ReceiptRecord) -> SourceRef {
 
 fn build_receipt_events(
     receipts: &[ReceiptRecord],
+    verification: &BTreeMap<String, ReceiptVerification>,
     check_attempts: &[CheckAttemptRecord],
 ) -> Vec<ReceiptEvent> {
     let mut attempts: HashMap<String, u32> = HashMap::new();
@@ -759,7 +770,11 @@ fn build_receipt_events(
             ReceiptEvent {
                 receipt_id: receipt.id.clone(),
                 label: receipt.label.clone(),
-                integrity: "hash_verified".to_string(),
+                integrity: verification
+                    .get(&receipt.id)
+                    .expect("verified receipt must retain trust metadata")
+                    .integrity
+                    .to_string(),
                 outcome: if expected_failures.contains(receipt.id.as_str()) {
                     "expected_failure".to_string()
                 } else if receipt.exit_code == 0 {

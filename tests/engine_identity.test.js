@@ -14,7 +14,7 @@ function tempFixture(name) {
 
 function compileIncompatibleEngine(dir) {
   const source = path.join(dir, "fake-engine.rs");
-  const binary = path.join(dir, process.platform === "win32" ? "receipts-core.exe" : "receipts-core");
+  const binary = path.join(dir, process.platform === "win32" ? "receipts.exe" : "receipts");
   fs.writeFileSync(
     source,
     [
@@ -32,7 +32,7 @@ function compileIncompatibleEngine(dir) {
   return binary;
 }
 
-test("CLI ignores an incompatible receipts-core first on PATH", (t) => {
+test("CLI ignores an incompatible receipts binary first on PATH", (t) => {
   const fixture = tempFixture("wrong-path-engine");
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
   const fakeDir = path.join(fixture, "fake-bin");
@@ -77,4 +77,29 @@ test("an explicitly supplied incompatible binary fails the identity handshake", 
 
   assert.notEqual(result.status, 0, "incompatible explicit engine must be rejected");
   assert.match(result.stderr, /identity handshake/i);
+});
+
+test("doctor verifies engine, protected key, schemas, checks, and never guesses model metadata", (t) => {
+  const fixture = tempFixture("doctor");
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const result = spawnSync(process.execPath, [path.join(repoRoot, "bin", "receipts.mjs"), "doctor"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      RECEIPTS_ENGINE_TARGET_DIR: path.join(fixture, "verified-engine"),
+    },
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.ok, true);
+  assert.match(report.identity.binary_digest, /^[0-9a-f]{64}$/);
+  assert.match(report.identity.key_fingerprint, /^[0-9a-f]{64}$/);
+  const byCode = new Map(report.checks.map((item) => [item.code, item.status]));
+  assert.equal(byCode.get("installation_identity"), "pass");
+  assert.equal(byCode.get("executor_key"), "pass");
+  assert.equal(byCode.get("schema_support"), "pass");
+  assert.equal(byCode.get("check_manifest"), "pass");
+  assert.equal(byCode.get("model_runtime_metadata"), "unavailable");
+  assert.equal(result.stdout.includes("secret_key"), false, "doctor must never print key material");
 });

@@ -7,7 +7,7 @@
 //! single author); the drift section renders from state/gate-report.json
 //! when present rather than re-deriving live-tree state.
 
-use crate::compiler::receipts::load_receipts;
+use crate::compiler::receipts::load_verified_receipts;
 use crate::compiler::report::GateReport;
 use crate::schema::NextPassPacket;
 use std::fs;
@@ -17,7 +17,7 @@ pub fn generate_brief(run_dir: &Path, as_json: bool) -> Result<String, Box<dyn s
     let packet: NextPassPacket = serde_json::from_str(&fs::read_to_string(
         run_dir.join("state").join("next_pass_packet.json"),
     )?)?;
-    let receipts = load_receipts(run_dir)?;
+    let receipts = load_verified_receipts(run_dir)?;
     let gate: Option<GateReport> =
         fs::read_to_string(run_dir.join("state").join("gate-report.json"))
             .ok()
