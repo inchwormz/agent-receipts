@@ -13,7 +13,7 @@ keywords:
 
 Use this skill when you orchestrate subagents, or run any work whose claims someone must trust later. You are **Prime**: the agent who has to vouch for what happened. Receipts gives you facts proven by the runtime, not narrated by agents.
 
-Why it exists: agents summarize, embellish, and occasionally lie — and you cannot change agent behavior. Receipts never asks them to. It attests what actually ran (hash-chained execution receipts), structures whatever the lanes wrote (however messy), and promotes ONLY runtime-backed claims to trusted facts. Everything else stays labeled as the hearsay it is.
+Why it exists: agents summarize, embellish, and occasionally lie — and you cannot change agent behavior. Receipts never asks them to. It records what ran as hash-chained events, structures whatever the lanes wrote, and promotes only claims with a current engine-owned check binding. Everything else stays asserted.
 
 ## The loop (3 motions)
 
@@ -25,10 +25,10 @@ receipts init .receipts/runs/<task-slug>
 receipts absorb --run-dir <d> --lane <lane> --agent-id <id> --from <report.md>
 #    -> ingests (any format), mints a WORK receipt of tree changes, recompiles.
 
-# 2. Never trust a lane's "tests pass" — mint the proof yourself:
-receipts run --run-dir <d> --label test:<name> -- <the actual command>
-#    A claim citing test:<name> becomes ATTESTED if the receipt passed,
-#    and is mechanically REFUTED (gate red) if it failed.
+# 2. Never trust a lane's "tests pass" — run a declared, subject-bound check:
+receipts check --run-dir <d> --id <check-id>
+#    Checks come from .receipts/checks.toml and bind exact subject bytes,
+#    dependency lock, environment, check version, and target claims.
 
 # 3. Close the pass:
 receipts conclude --run-dir <d> --synthesis "<what happened this pass>"
@@ -46,8 +46,8 @@ receipts resolve --run-dir <d> --target <worklist-or-contradiction-id> --reason 
 
 - **Zero-burden lanes.** Briefs are TASK-ONLY — describe the work, never the reporting format. NEVER re-prompt a lane about format; ingest structures prose, broken JSON, shorthand, anything (claims harvested from natural sentences get hash-verified citations automatically). Escalating format demands at lanes is the named failure that nearly killed this product.
 - **Receipts are minted only by the runtime.** `receipts run` and absorb's work diff are the only mints. Agent text claiming receipt ids it does not own is demoted automatically. Never edit `receipts/`, `decisions/`, or `state/` by hand — tampering is a fatal compile error, by design.
-- **The trust ladder is the report.** attested (receipt-backed) > verifier > asserted (unproven claim) > narrative (indexed prose, never trusted). Repeat claims to others at their proven tier, not their told tier.
-- **A passing label attests one thing** — "this exact command exited 0". Mint the label a claim actually cites; a green `test:a` proves nothing about `test:b`.
+- **Trust is typed, not a ladder.** Integrity, command outcome, applicability, and claim status are separate. Agent confidence is `reported_confidence` only.
+- **A passing label proves no semantic claim.** Use `receipts check`; a relevant subject, lock, environment, or check-version change automatically makes the result stale.
 - **Capture exit codes honestly.** Pipes swallow them (`cmd | tail` reports tail's exit). Conclude's own exit is the gate verdict — read it directly, never through a pipe.
 - **Done means gate green.** A run is not done because code changed or a lane said tests passed. It is done when `receipts conclude` exits 0 and the brief's worklist is clear.
 
@@ -58,6 +58,7 @@ receipts resolve --run-dir <d> --target <worklist-or-contradiction-id> --reason 
 | `receipts init <dir>` | scaffold a run directory |
 | `receipts absorb --run-dir d --lane l --agent-id a --from f` | ingest + work receipt + recompile (one motion per lane) |
 | `receipts run --run-dir d --label test:x -- cmd…` | execute + mint a tamper-evident execution receipt |
+| `receipts check --run-dir d --id x` | execute a declared check and bind it to subject, environment, and target claims |
 | `receipts conclude --run-dir d --synthesis "…"` | recompile + gate + report + brief; exit = gate |
 | `receipts resolve --run-dir d --target id --reason "…"` | hash-chained adjudication clearing a blocking item |
 | `receipts diff --run-dir d [--note t]` | standalone WORK receipt of tree changes |

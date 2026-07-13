@@ -80,7 +80,7 @@ function walkFiles(dir) {
 }
 
 function inputFiles(runDir) {
-  const inputDirs = ["raw", "worker-results", "verifier-results", "receipts", "decisions"];
+  const inputDirs = ["raw", "worker-results", "verifier-results", "receipts", "decisions", "checks"];
   return [
     path.join(runDir, "manifest.json"),
     path.join(runDir, "task.md"),
@@ -134,37 +134,9 @@ const ALLOWED_SOURCE_KINDS = new Set([
   "receipt",
 ]);
 
-// M1/M2: receipt journal lookups (ids + labels whose LATEST receipt passed).
-// Chain integrity is enforced at compile time and custody by the input
-// fingerprint; the gate only needs the outcome map.
-let RECEIPTS = { ids: new Set(), passingLabels: new Set() };
-
-function loadReceiptOutcomes(runDir) {
-  const ids = new Set();
-  const latestByLabel = new Map();
-  const file = path.join(runDir, "receipts", "receipts.jsonl");
-  if (fs.existsSync(file)) {
-    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const record = JSON.parse(trimmed);
-        // WORK receipts (label work:tree) attest tree state, never claims:
-        // invisible to both citable ids and passing labels (a lane minting a
-        // work receipt gains nothing).
-        if (record.label === "work:tree") continue;
-        if (record.id) ids.add(record.id);
-        if (record.label) latestByLabel.set(record.label, record);
-      } catch {
-        // compile already validated; a bad line here just doesn't count
-      }
-    }
-  }
-  const passingLabels = new Set(
-    [...latestByLabel.entries()].filter(([, record]) => record.exit_code === 0).map(([label]) => label),
-  );
-  return { ids, passingLabels };
-}
+// Schema 2 claim promotion is engine-owned and bound to an exact check
+// attempt. Receipt ids and caller-selected labels are event attribution only.
+let VERIFIED_CLAIMS = new Set();
 
 const MAX_OBSERVED_AT_DRIFT_DAYS = 7;
 
@@ -353,12 +325,11 @@ function checkRawSourceRef(source, runDir, errors, prefix) {
   }
 }
 
-// F2 + M2 truth-in-labeling: a "direct source" is a citation whose hash was
-// computed from CONTENT the pipeline observed: file refs hashed from disk at
-// ingest, receipt citations present in the runtime journal, or command/test
-// labels whose LATEST receipt actually PASSED. Bare label-hashed refs with no
-// receipt behind them remain identity keys, never provenance.
+// F2 + schema 2 truth-in-labeling: a direct source is content-backed file/git
+// evidence or a compiler-verified, current claim binding. Runtime receipt ids
+// and labels prove that a command ran, not that a semantic claim is true.
 function hasDirectSource(record) {
+  if (VERIFIED_CLAIMS.has(record.id)) return true;
   if (
     sourceRefs(record).some(
       (source) => source && source.kind === "file" && source.hash_basis !== "label",
@@ -368,11 +339,10 @@ function hasDirectSource(record) {
   }
   return (record.source_ids ?? []).some((id) => {
     if (typeof id !== "string") return false;
-    if (id.startsWith("receipt:")) return RECEIPTS.ids.has(id.slice("receipt:".length));
     // A commit citation is content-addressed by git itself; the gate
     // re-verifies existence rather than trusting ingest's stamp.
     if (id.startsWith("commit:")) return commitExistsInRepo(id.slice("commit:".length));
-    return RECEIPTS.passingLabels.has(id);
+    return false;
   });
 }
 
@@ -473,7 +443,7 @@ function checkContradictionSourceRefs(packet, runDir, errors, anchorMs, warnings
   }
 }
 
-const KNOWN_SCHEMA_VERSIONS = new Set(["1.1.0", "1.2.0"]);
+const KNOWN_SCHEMA_VERSIONS = new Set(["1.1.0", "1.2.0", "2.0.0"]);
 
 function checkPacketSchemaVersion(packet, errors) {
   if (!packet) return;
@@ -537,7 +507,9 @@ function requiresDirectVerifier(record) {
     );
     return !citesRaw;
   }
-  return Number(record.verifier_score ?? 0) >= 0.9;
+  // verifier_score is caller-authored diagnostic metadata. It never changes
+  // whether a semantic pass needs direct provenance.
+  return String(record.status ?? "").toLowerCase() === "passed";
 }
 
 function statusSummary(records) {
@@ -718,7 +690,15 @@ function main() {
     typeof manifest?.repo_root === "string" && manifest.repo_root.length > 0
       ? manifest.repo_root
       : null;
-  RECEIPTS = loadReceiptOutcomes(runDir);
+  VERIFIED_CLAIMS = new Set(
+    (packet?.trust_assessments ?? [])
+      .filter(
+        (assessment) =>
+          assessment.applicability === "current" &&
+          ["verified", "verifier_backed"].includes(assessment.claim_status),
+      )
+      .map((assessment) => assessment.subject_id),
+  );
 
   const staleness = stalePacket(runDir);
   if (staleness === "missing") {

@@ -82,8 +82,8 @@ function parsePacket(stdout) {
   assert(Array.isArray(packet.halt_signals), "packet missing halt_signals array");
   assert(Array.isArray(packet.sources), "packet missing sources array");
   assert(
-    packet.schema_version === "1.2.0",
-    `packet schema_version must be "1.2.0" (got ${JSON.stringify(packet.schema_version)})`,
+    packet.schema_version === "2.0.0",
+    `packet schema_version must be "2.0.0" (got ${JSON.stringify(packet.schema_version)})`,
   );
   assertPacketItemsAreSourceBacked(packet);
   assertPacketDeterminism(packet);

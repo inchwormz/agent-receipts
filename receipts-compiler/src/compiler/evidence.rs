@@ -257,7 +257,7 @@ mod tests {
                 observed_at: "2026-04-21T00:00:00Z".to_string(),
                 agent_id: None,
                 lane: None,
-                confidence: None,
+                reported_confidence: None,
                 rationale: None,
                 diff_ref: None,
                 span_before: None,
@@ -269,7 +269,7 @@ mod tests {
             trusted_facts: vec![CompiledFact {
                 id: "fact-1".to_string(),
                 statement: "build failed".to_string(),
-                confidence: 0.8,
+                reported_confidence: Some(0.8),
                 objective_relevance: 0.9,
                 novelty_gain: 0.1,
                 needs_raw_drilldown: false,
@@ -279,7 +279,7 @@ mod tests {
             active_hypotheses: vec![Hypothesis {
                 id: "hyp-1".to_string(),
                 statement: "schema is wrong".to_string(),
-                confidence: 0.6,
+                reported_confidence: Some(0.6),
                 verifier_score: None,
                 source_ids: source_ids.clone(),
             }],
@@ -338,6 +338,10 @@ mod tests {
             }],
             sources: vec![source()],
             lane_digests: vec![],
+            trust_assessments: vec![],
+            receipt_events: vec![],
+            evidence_coverage: None,
+            check_histories: vec![],
         }
     }
 

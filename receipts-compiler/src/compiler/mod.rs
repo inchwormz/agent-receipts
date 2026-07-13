@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod brief;
+pub mod checks;
 pub mod contradictions;
 pub mod evidence;
 pub mod journal;

@@ -81,3 +81,26 @@ The highest-risk assumption is that current green tests measure the shipped path
 - **Verified final pre-commit suite:** `npm test` passed 71 Node tests, the isolated Rust/readiness suite, and readiness after the last source change.
 - **Campaign trust remains 0/3:** Stage 0 fixed provenance/launcher mechanisms; the three typed-trust false-greens intentionally remain the Stage 1 measure.
 - Next: commit Stage 0 as one logical unit, re-run identity/readiness from the clean commit, then start the three Stage 1 falsifiers.
+
+### 2026-07-14 — Stage 0 committed identity
+
+- **Verified commit:** `052329d14edb52806440f0e770c1de560e28dac7` (`feat: make public receipts checkout self-verifying`). Not pushed.
+- **Verified committed engine SHA-256:** `3d94c3b296865609d36d3754ca20699b95bd1e336826b71c98fede6b07ecb9df`.
+- **Verified committed identity:** protocol `1`, engine `0.1.1`, build commit `052329d14edb52806440f0e770c1de560e28dac7`, dependency-lock SHA-256 `0bfc909eed2e864b0ebaa06da9254635d2f9a403c15bc8743166e59e612088eb`, Windows `x86_64`.
+
+### 2026-07-14 — Stage 1 typed-trust checkpoint
+
+- **Trust moved from 0/3 to 3/3 demonstrated false-green mechanisms blocked.** A failed command cannot improve Evidence Coverage; a covered subject change makes an old green `stale`; self-authored and zero-score verifier input cannot promote a claim.
+- **Verified schema:** current output is `2.0.0`; legacy `1.1.0` and `1.2.0` deserialize without being rewritten. Agent `confidence` is read only as diagnostic `reported_confidence`.
+- **Verified claim/event separation:** execution and work receipts render as typed `receipt_events`, never claim coverage or trusted facts. The report heading is **Evidence Coverage**.
+- **Verified check binding:** `.receipts/checks.toml` controls tokenized command, covered path globs, eligible claim kinds, environment class, check version, and target claims. Passing claims bind to BLAKE3 digests of exact covered bytes, root dependency locks, command, and OS/architecture environment.
+- **Verified freshness:** changing a covered file removes promotion and emits `applicability: stale`; a check attempt written after compile makes the packet fingerprint stale.
+- **Verified negative controls:** an intended broken fixture records `expected_failure` only when it exits nonzero with the declared signature. An unexpected pass or wrong signature records `failed` and exits red.
+- **Verified retry visibility:** first result, latest result, total attempts, attempts-to-green, failure signatures, transitions, and flake rate remain in `check_histories`; retry-until-green no longer erases red history.
+- **Verified sidecar custody:** a copied, internally hash-valid check-attempt sidecar fails compile unless its primary and negative-control receipts exist in the same verified receipt journal and match command digest, labels, and outcomes.
+- **Verified verifier rule:** `verifier_score` is ignored for trust and gate provenance. Raw verifier input is non-promoting until Stage 2 can require a valid signature from a different authenticated executor principal.
+- **Verified rollout mode:** stale and unbound findings appear in the HTML report as `report-only`; they are not yet independent categorical gate failures.
+- **Verified final Node/readiness result:** `npm test` passed **78/78 Node tests** and `receipts readiness: passed` after the last trust-code change.
+- **Verified final Rust result:** isolated `cargo test --locked` passed **57 tests total** (49 library + 1 determinism + 1 init + 4 argv + 2 compatibility); formatter check and `git diff --check` passed.
+- **Calibration remains 0 independently adjudicated outcomes.** No false-green probability or reliability score is eligible for presentation.
+- Next: commit Stage 1 as one logical unit, re-verify the committed engine identity, then begin Stage 2 cryptographic signing and the single-engine migration.

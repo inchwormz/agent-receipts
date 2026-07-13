@@ -84,16 +84,11 @@ function runNode(args, options = {}) {
   });
 }
 
-// Invoke the dev binary the same way the driver does (source checkout).
 function coreRun(runDir, label, exitCode) {
   return spawnSync(
-    "cargo",
+    process.execPath,
     [
-      "run",
-      "--quiet",
-      "--bin",
-      "receipts-core",
-      "--",
+      path.join(repoRoot, "bin", "receipts.mjs"),
       "run",
       "--run-dir",
       runDir,
@@ -102,14 +97,22 @@ function coreRun(runDir, label, exitCode) {
       "--agent-id",
       "prime",
       ...(label ? ["--label", label] : []),
-      "--",
-      "node",
+      "--exe",
+      process.execPath,
+      "--arg",
       "-e",
-      // Quote-free on purpose: this arg transits shell:true concatenation on
-      // Windows, so quotes/semicolons would be mangled before reaching node.
+      "--arg",
       `process.exit(${exitCode})`,
     ],
-    { cwd: compilerDir, encoding: "utf8", shell: process.platform === "win32" },
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+}
+
+function coreCommand(args, options = {}) {
+  return spawnSync(
+    process.execPath,
+    [path.join(repoRoot, "bin", "receipts.mjs"), ...args],
+    { cwd: repoRoot, encoding: "utf8", ...options },
   );
 }
 
@@ -161,7 +164,7 @@ test("receipts run mints chained receipts and propagates the child exit code", (
   assert.ok(fs.existsSync(artifact), "stdout artifact must be stored content-addressed");
 });
 
-test("receipts compile into attested facts with zero agent cooperation", (t) => {
+test("receipt events stay separate from claims with typed outcomes", (t) => {
   const runDir = freshRunDir("attested");
   t.after(() => removeDir(runDir));
 
@@ -175,11 +178,319 @@ test("receipts compile into attested facts with zero agent cooperation", (t) => 
     "packet must carry the receipt as a content-hashed source",
   );
   const fact = packet.trusted_facts.find((f) => f.id === "fact:ev-rcpt-0001");
-  assert.ok(fact, "receipt must become a trusted fact");
-  assert.equal(fact.attestation, "attested", "receipt facts carry the attested tier");
+  assert.equal(fact, undefined, "execution events must never masquerade as claims");
+  assert.equal(packet.evidence.some((item) => item.kind === "receipt"), false);
+  assert.deepEqual(packet.receipt_events, [
+    {
+      receipt_id: "rcpt-0001",
+      label: "test:demo-pass",
+      integrity: "hash_verified",
+      outcome: "passed",
+      exit_code: 0,
+      attempts_for_label: 1,
+    },
+  ]);
 });
 
-test("an agent claim citing a label whose receipt PASSED becomes an attested fact", (t) => {
+test("a failed command cannot improve Evidence Coverage", (t) => {
+  const runDir = freshRunDir("failed-coverage");
+  t.after(() => removeDir(runDir));
+
+  assert.equal(coreRun(runDir, "test:failed-coverage", 3).status, 3);
+  const ingest = ingestLane(
+    runDir,
+    "coverage-claimer",
+    [
+      "```receipts-evidence-jsonl",
+      JSON.stringify({
+        id: "ev-failed-coverage-claim",
+        kind: "observation",
+        summary: "the failing check passed",
+        source_ids: ["test:failed-coverage"],
+        observed_at: now(),
+      }),
+      "```",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(ingest.status, 0, ingest.stderr);
+  const driver = runNode(["driver.mjs", "--run-dir", runDir]);
+  assert.equal(driver.status, 0, driver.stderr);
+  const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+
+  assert.equal(packet.trusted_facts.some((fact) => fact.id === "fact:ev-failed-coverage-claim"), false);
+  assert.deepEqual(packet.evidence_coverage, {
+    total_claims: 1,
+    verified_claims: 0,
+    verifier_backed_claims: 0,
+    asserted_claims: 1,
+    refuted_claims: 0,
+  });
+  assert.equal(packet.receipt_events[0].outcome, "failed");
+});
+
+test("a passing check becomes stale after its covered subject changes", (t) => {
+  const runDir = freshRunDir("subject-freshness");
+  t.after(() => removeDir(runDir));
+  const projectDir = path.join(runDir, "project");
+  fs.mkdirSync(path.join(projectDir, ".receipts"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "subject.txt"), "version one\n", "utf8");
+  fs.writeFileSync(
+    path.join(projectDir, ".receipts", "checks.toml"),
+    [
+      "manifest_version = 1",
+      "",
+      "[[checks]]",
+      'id = "subject-check"',
+      'version = "1"',
+      `command = [${JSON.stringify(process.execPath)}, "-e", "process.exit(0)"]`,
+      'covered_paths = ["subject.txt"]',
+      'eligible_claim_kinds = ["observation"]',
+      'environment_class = "local"',
+      'target_claims = ["ev-bound-subject"]',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const manifestPath = path.join(runDir, "manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.repo_root = projectDir;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  fs.appendFileSync(
+    path.join(runDir, "worker-results", "evidence.jsonl"),
+    JSON.stringify({
+      id: "ev-bound-subject",
+      kind: "observation",
+      summary: "the subject satisfies its check",
+      source_ids: ["raw:objective.md"],
+      observed_at: now(),
+    }) + "\n",
+    "utf8",
+  );
+
+  const check = coreCommand(["check", "--run-dir", runDir, "--id", "subject-check"]);
+  assert.equal(check.status, 0, `bound check must run: ${check.stdout}\n${check.stderr}`);
+  assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);
+  let packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+  assert.ok(packet.trusted_facts.some((fact) => fact.id === "fact:ev-bound-subject"));
+  assert.equal(packet.trust_assessments.find((item) => item.subject_id === "ev-bound-subject").applicability, "current");
+
+  fs.writeFileSync(path.join(projectDir, "subject.txt"), "version two\n", "utf8");
+  assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);
+  packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+  assert.equal(packet.trusted_facts.some((fact) => fact.id === "fact:ev-bound-subject"), false);
+  const trust = packet.trust_assessments.find((item) => item.subject_id === "ev-bound-subject");
+  assert.equal(trust.applicability, "stale");
+  assert.equal(trust.claim_status, "asserted");
+});
+
+test("negative controls are expected failures only for the declared signature", (t) => {
+  const runDir = freshRunDir("negative-control");
+  t.after(() => removeDir(runDir));
+  const projectDir = path.join(runDir, "project");
+  fs.mkdirSync(path.join(projectDir, ".receipts"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "subject.txt"), "fixture\n", "utf8");
+  const manifestPath = path.join(runDir, "manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.repo_root = projectDir;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  fs.appendFileSync(
+    path.join(runDir, "worker-results", "evidence.jsonl"),
+    JSON.stringify({
+      id: "ev-negative-control",
+      kind: "observation",
+      summary: "the negative control guards this claim",
+      source_ids: ["raw:objective.md"],
+      observed_at: now(),
+    }) + "\n",
+    "utf8",
+  );
+
+  const writeCheck = (signature, version) => fs.writeFileSync(
+    path.join(projectDir, ".receipts", "checks.toml"),
+    [
+      "manifest_version = 1",
+      "",
+      "[[checks]]",
+      'id = "negative-control"',
+      `version = "${version}"`,
+      `command = [${JSON.stringify(process.execPath)}, "-e", "process.exit(0)"]`,
+      'covered_paths = ["subject.txt"]',
+      'eligible_claim_kinds = ["observation"]',
+      'environment_class = "local"',
+      'target_claims = ["ev-negative-control"]',
+      `negative_control_command = [${JSON.stringify(process.execPath)}, "-e", "console.error('BROKEN_FIXTURE'); process.exit(9)"]`,
+      `negative_control_expected_signature = "${signature}"`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+
+  writeCheck("BROKEN_FIXTURE", "1");
+  const expected = coreCommand(["check", "--run-dir", runDir, "--id", "negative-control"]);
+  assert.equal(expected.status, 0, `${expected.stdout}\n${expected.stderr}`);
+  const attemptsPath = path.join(runDir, "checks", "attempts.jsonl");
+  let attempts = readJsonl(attemptsPath);
+  assert.equal(attempts[0].outcome, "passed");
+  assert.equal(attempts[0].negative_control_outcome, "expected_failure");
+
+  assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);
+  const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+  const controlEvent = packet.receipt_events.find((event) => event.label === "check:negative-control:negative-control");
+  assert.equal(controlEvent.outcome, "expected_failure");
+  assert.ok(packet.trusted_facts.some((fact) => fact.id === "fact:ev-negative-control"));
+
+  writeCheck("A_DIFFERENT_FAILURE", "1");
+  assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);
+  const stalePacket = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+  assert.equal(stalePacket.trusted_facts.some((fact) => fact.id === "fact:ev-negative-control"), false);
+  assert.equal(
+    stalePacket.trust_assessments.find((item) => item.subject_id === "ev-negative-control").applicability,
+    "stale",
+  );
+  const wrong = coreCommand(["check", "--run-dir", runDir, "--id", "negative-control"]);
+  assert.equal(wrong.status, 1, "wrong failure signature must fail the check");
+  attempts = readJsonl(attemptsPath);
+  assert.equal(attempts[1].outcome, "failed");
+  assert.equal(attempts[1].negative_control_outcome, "failed");
+});
+
+test("retry-until-green preserves first result, transitions, and flakiness", (t) => {
+  const runDir = freshRunDir("retry-history");
+  t.after(() => removeDir(runDir));
+  const projectDir = path.join(runDir, "project");
+  fs.mkdirSync(path.join(projectDir, ".receipts"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "subject.txt"), "fixture\n", "utf8");
+  const marker = path.join(projectDir, "attempt.marker");
+  const command = [
+    process.execPath,
+    "-e",
+    `const fs=require('fs');const p=${JSON.stringify(marker)};if(!fs.existsSync(p)){fs.writeFileSync(p,'1');console.error('FIRST_FAIL');process.exit(7)}`,
+  ];
+  fs.writeFileSync(
+    path.join(projectDir, ".receipts", "checks.toml"),
+    [
+      "manifest_version = 1",
+      "",
+      "[[checks]]",
+      'id = "retry-check"',
+      'version = "1"',
+      `command = ${JSON.stringify(command)}`,
+      'covered_paths = ["subject.txt"]',
+      'eligible_claim_kinds = ["observation"]',
+      'environment_class = "local"',
+      'target_claims = ["ev-retry"]',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const manifestPath = path.join(runDir, "manifest.json");
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  manifest.repo_root = projectDir;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+  fs.appendFileSync(
+    path.join(runDir, "worker-results", "evidence.jsonl"),
+    JSON.stringify({
+      id: "ev-retry",
+      kind: "observation",
+      summary: "the retry fixture passes",
+      source_ids: ["raw:objective.md"],
+      observed_at: now(),
+    }) + "\n",
+    "utf8",
+  );
+
+  assert.equal(coreCommand(["check", "--run-dir", runDir, "--id", "retry-check"]).status, 1);
+  assert.equal(coreCommand(["check", "--run-dir", runDir, "--id", "retry-check"]).status, 0);
+  assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);
+  const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+  assert.deepEqual(packet.check_histories, [
+    {
+      check_id: "retry-check",
+      target_claims: ["ev-retry"],
+      first_result: "failed",
+      latest_result: "passed",
+      attempts: 2,
+      attempts_to_green: 2,
+      failure_signatures: [readJsonl(path.join(runDir, "checks", "attempts.jsonl"))[0].failure_signature],
+      transitions: ["failed->passed"],
+      flake_rate: 0.5,
+    },
+  ]);
+  assert.ok(packet.trusted_facts.some((fact) => fact.id === "fact:ev-retry"));
+});
+
+test("a check attempt written after compile makes the packet fingerprint stale", (t) => {
+  const runDir = freshRunDir("check-fingerprint");
+  t.after(() => removeDir(runDir));
+  assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);
+  fs.mkdirSync(path.join(runDir, "checks"), { recursive: true });
+  fs.writeFileSync(path.join(runDir, "checks", "attempts.jsonl"), "{}\n", "utf8");
+  const gate = runNode(["scripts/strict-gate.mjs", "--run-dir", runDir], {
+    env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" },
+  });
+  assert.notEqual(gate.status, 0);
+  assert.ok(gate.stdout.includes("next_pass_packet.json is stale"), gate.stdout);
+});
+
+test("a copied check-attempt sidecar cannot promote without its verified receipts", (t) => {
+  const sourceRun = freshRunDir("copied-check-source");
+  const targetRun = freshRunDir("copied-check-target");
+  t.after(() => removeDir(sourceRun));
+  t.after(() => removeDir(targetRun));
+  const projectDir = path.join(sourceRun, "project");
+  fs.mkdirSync(path.join(projectDir, ".receipts"), { recursive: true });
+  fs.writeFileSync(path.join(projectDir, "subject.txt"), "fixture\n", "utf8");
+  fs.writeFileSync(
+    path.join(projectDir, ".receipts", "checks.toml"),
+    [
+      "manifest_version = 1",
+      "",
+      "[[checks]]",
+      'id = "copied-check"',
+      'version = "1"',
+      `command = [${JSON.stringify(process.execPath)}, "-e", "process.exit(0)"]`,
+      'covered_paths = ["subject.txt"]',
+      'eligible_claim_kinds = ["observation"]',
+      'environment_class = "local"',
+      'target_claims = ["ev-copied-check"]',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  for (const runDir of [sourceRun, targetRun]) {
+    const manifestPath = path.join(runDir, "manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.repo_root = projectDir;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+    fs.appendFileSync(
+      path.join(runDir, "worker-results", "evidence.jsonl"),
+      JSON.stringify({
+        id: "ev-copied-check",
+        kind: "observation",
+        summary: "copied attempt must not verify me",
+        source_ids: ["raw:objective.md"],
+        observed_at: now(),
+      }) + "\n",
+      "utf8",
+    );
+  }
+  assert.equal(coreCommand(["check", "--run-dir", sourceRun, "--id", "copied-check"]).status, 0);
+  fs.mkdirSync(path.join(targetRun, "checks"), { recursive: true });
+  fs.copyFileSync(
+    path.join(sourceRun, "checks", "attempts.jsonl"),
+    path.join(targetRun, "checks", "attempts.jsonl"),
+  );
+
+  const compile = coreCommand(["compile", "--run-dir", targetRun]);
+  assert.notEqual(compile.status, 0, "sidecar without the referenced receipt must fail closed");
+  assert.ok(
+    `${compile.stdout}\n${compile.stderr}`.includes("does not reference a verified primary receipt"),
+    `${compile.stdout}\n${compile.stderr}`,
+  );
+});
+
+test("an unbound passing receipt label cannot promote an agent claim", (t) => {
   const runDir = freshRunDir("label-upgrade");
   t.after(() => removeDir(runDir));
 
@@ -202,8 +513,11 @@ test("an agent claim citing a label whose receipt PASSED becomes an attested fac
   const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
 
   const backed = packet.trusted_facts.find((f) => f.id === "fact:ev-claim-backed");
-  assert.ok(backed, "label-backed claim must promote");
-  assert.equal(backed.attestation, "attested");
+  assert.equal(backed, undefined, "caller-selected receipt labels are not semantic bindings");
+  assert.equal(
+    packet.trust_assessments.find((item) => item.subject_id === "ev-claim-backed").applicability,
+    "unbound",
+  );
   assert.equal(
     packet.trusted_facts.find((f) => f.id === "fact:ev-claim-unbacked"),
     undefined,
@@ -270,7 +584,7 @@ test("agents cannot impersonate receipts or cite unminted ones", (t) => {
   assert.ok((rec.provenance_warnings ?? []).some((w) => w.startsWith("receipt-impersonation")));
 });
 
-test("work receipts attest tree state but confer NOTHING on claims citing them", (t) => {
+test("work receipts remain events and confer nothing on claims citing them", (t) => {
   const runDir = freshRunDir("work-receipt");
   t.after(() => removeDir(runDir));
 
@@ -301,11 +615,10 @@ test("work receipts attest tree state but confer NOTHING on claims citing them",
   assert.equal(driver.status, 0, `compile failed: ${driver.stderr}`);
   const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
 
-  // The work receipt itself IS an attested fact about the tree...
+  // Work execution is a typed event, not a semantic claim.
   const workFact = packet.trusted_facts.find((f) => f.id === "fact:ev-rcpt-0001");
-  assert.ok(workFact, "work receipt must compile to an attested tree-state fact");
-  assert.equal(workFact.attestation, "attested");
-  assert.ok(workFact.statement.startsWith("tree delta:"), workFact.statement);
+  assert.equal(workFact, undefined);
+  assert.equal(packet.receipt_events.find((event) => event.receipt_id === "rcpt-0001").label, "work:tree");
 
   // ...but the rider gains nothing: its claim stays out of trusted_facts.
   assert.equal(
@@ -345,7 +658,7 @@ test("a tampered journal breaks the chain and fails compile", (t) => {
   );
 });
 
-test("a passing receipt upgrades a label-only finding past the summary-only check", (t) => {
+test("a passing receipt label cannot claim semantic verifier coverage", (t) => {
   const runDir = freshRunDir("label-finding");
   t.after(() => removeDir(runDir));
 
@@ -365,11 +678,10 @@ test("a passing receipt upgrades a label-only finding past the summary-only chec
   const gate = runNode(["scripts/strict-gate.mjs", "--run-dir", runDir], {
     env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" },
   });
-  // The gate may fail for other reasons (pending synthesis etc.) - what must
-  // NOT appear is a summary-only complaint about the receipt-backed finding.
+  // An arbitrary passing command proves only that it ran; it does not bind
+  // this self-authored semantic verifier statement to a subject or claim.
   assert.ok(
-    !gate.stdout.includes("summary-only verifier findings lack direct file/command provenance: vf-label-backed") &&
-      !(gate.stdout.includes("summary-only verifier findings") && gate.stdout.includes("vf-label-backed")),
-    `receipt-backed label finding must not be summary-only; got ${gate.stdout}`,
+    gate.stdout.includes("summary-only verifier findings") && gate.stdout.includes("vf-label-backed"),
+    `unbound receipt labels must not create semantic coverage; got ${gate.stdout}`,
   );
 });

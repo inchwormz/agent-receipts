@@ -51,7 +51,8 @@ mod contract_tests {
             .as_array()
             .expect("schema_version enum");
         assert!(
-            versions.iter().any(|value| value == "1.2.0")
+            versions.iter().any(|value| value == "2.0.0")
+                && versions.iter().any(|value| value == "1.2.0")
                 && versions.iter().any(|value| value == "1.1.0"),
             "packet schema_version enum must cover current + legacy versions"
         );

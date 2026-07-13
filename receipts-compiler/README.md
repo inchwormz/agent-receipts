@@ -10,7 +10,8 @@ Part of the [agent-receipts](https://github.com/inchwormz/agent-receipts) projec
 
 - Reads a run directory containing `manifest.json`, `worker-results/evidence.jsonl`, `verifier-results/findings.jsonl`, and `raw/` artifacts.
 - Validates every `source_ref` — hashes `file:` references against disk, checks line-range spans, enforces provenance rules for substantive evidence kinds.
-- Promotes evidence into `trusted_facts` using agent-supplied `confidence` when present.
+- Emits schema `2.0.0` typed trust: integrity, command outcome, applicability, and claim status are independent engine-owned fields.
+- Promotes a claim only through a current `.receipts/checks.toml` binding over exact subject bytes, dependency locks, environment, check version, and target claim. Agent confidence is retained only as `reported_confidence` diagnostics.
 - Auto-detects `Contradiction` entries when different agents assert divergent summaries on the same direct source span, graduating severity by evidence kind.
 - Emits `next_pass_packet.json`, `snapshot.json`, `decision_log.jsonl` — byte-deterministic for byte-identical inputs.
 
@@ -47,7 +48,7 @@ Outputs land in `state/` inside the run directory.
   "summary": "The timeout helper is now used by Firecrawl API calls.",
   "agent_id": "receipts-evidence-worker",
   "lane": "impl",
-  "confidence": 0.9,
+  "reported_confidence": 0.9,
   "rationale": "Read at file:scripts/foo.js:42.",
   "source_ids": ["file:skills/foo.js:42"],
   "source_refs": [

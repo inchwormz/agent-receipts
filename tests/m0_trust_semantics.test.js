@@ -227,7 +227,7 @@ test("F7+F1: a span lie is demoted and never becomes a trusted fact, even with v
   assert.equal(fact, undefined, "demoted record must never reach trusted_facts");
 });
 
-test("F1: verifier-backed evidence becomes a trusted fact with attestation, unbacked evidence does not", (t) => {
+test("F1: self-authored verifier evidence cannot promote regardless of verifier_score", (t) => {
   const runDir = freshRunDir("verifier-backing");
   t.after(() => removeDir(runDir));
 
@@ -268,9 +268,12 @@ test("F1: verifier-backed evidence becomes a trusted fact with attestation, unba
   );
 
   const fact = packet.trusted_facts.find((item) => item.id === "fact:ev-backed");
-  assert.ok(fact, "verifier-backed evidence must promote to trusted_facts");
-  assert.equal(fact.attestation, "verifier", "promoted fact must carry its attestation tier");
-  assert.ok(Math.abs(fact.confidence - 0.9) < 1e-3);
+  assert.equal(fact, undefined, "same-principal verifier must not promote its own claim");
+  const trust = packet.trust_assessments.find((item) => item.subject_id === "ev-backed");
+  assert.equal(trust.claim_status, "asserted");
+  assert.equal(trust.verifier_independent, false);
+  const evidence = packet.evidence.find((item) => item.id === "ev-backed");
+  assert.ok(Math.abs(evidence.reported_confidence - 0.9) < 1e-3);
 
   const ghost = packet.trusted_facts.find((item) => item.id === "fact:ev-unbacked");
   assert.equal(ghost, undefined, "self-graded, unbacked evidence must stay out of trusted_facts");
@@ -300,6 +303,29 @@ test("F6: naming a finding 'subagent' no longer waives the direct-provenance req
     gate.stdout.includes("summary-only verifier findings") &&
       gate.stdout.includes("vf-subagent-sneak"),
     `gate must name the sneak finding as summary-only; got ${gate.stdout}`,
+  );
+});
+
+test("F1: verifier_score zero cannot relax semantic provenance", (t) => {
+  const runDir = freshRunDir("zero-score-verifier");
+  t.after(() => removeDir(runDir));
+  const finding = {
+    id: "vf-zero-score",
+    summary: "Everything is correct because I said so",
+    status: "passed",
+    verifier_score: 0.0,
+    source_ids: ["raw:objective.md"],
+  };
+  const from = writeFenced(runDir, "zero-score-verifier", [], [finding]);
+  assert.equal(ingest(runDir, "zero-score", "same-worker", from).status, 0);
+  assert.equal(runNode(["driver.mjs", "--run-dir", runDir]).status, 0);
+  const gate = runNode(["scripts/strict-gate.mjs", "--run-dir", runDir], {
+    env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" },
+  });
+  assert.notEqual(gate.status, 0);
+  assert.ok(
+    gate.stdout.includes("summary-only verifier findings") && gate.stdout.includes("vf-zero-score"),
+    `verifier_score must not change trust or provenance requirements; got ${gate.stdout}`,
   );
 });
 

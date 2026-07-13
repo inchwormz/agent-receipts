@@ -169,15 +169,16 @@ test("lane digests are conservative and receipts next renders the brief", (t) =>
   const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
   const riderDigest = packet.lane_digests.find((d) => d.lane === "rider");
   assert.ok(riderDigest, `rider digest must exist; got ${JSON.stringify(packet.lane_digests)}`);
-  assert.equal(riderDigest.attested, 1, "label-backed claim still counts attested");
+  assert.equal(riderDigest.attested, 0, "caller labels are attribution, not attestation");
+  assert.equal(riderDigest.asserted, 1);
   assert.equal(
     riderDigest.read_recommendation,
     "read-unverified",
-    "label-backed attestation must floor at read-unverified (review finding 5)",
+    "an unbound claim must remain read-unverified",
   );
   assert.ok(riderDigest.drill_down.some((h) => /^raw:subagents\/rider\.md:\d+-\d+$/.test(h)), `drill handles must be span-suffixed; got ${JSON.stringify(riderDigest.drill_down)}`);
   const orchestratorDigest = packet.lane_digests.find((d) => d.lane === "orchestrator");
-  assert.equal(orchestratorDigest.read_recommendation, "skip-verified", "infra-only receipt lane is skippable");
+  assert.equal(orchestratorDigest, undefined, "receipt events do not create claim lanes");
 
   // The brief.
   const brief = coreBin(["next", "--run-dir", runDir]);

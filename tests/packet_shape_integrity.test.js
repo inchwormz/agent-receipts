@@ -228,7 +228,8 @@ test("F1+F4 driver: caller attribution reaches the packet; unverified evidence i
   assert.equal(compiled.agent_id, "driver-agent-caller", "caller stamp must reach the packet");
   assert.equal(compiled.lane, "driver-lane-caller");
   assert.equal(compiled.claimed_agent_id, "driver-worker", "claimed identity must reach the packet");
-  assert.equal(compiled.confidence, 0.81);
+  assert.equal(compiled.reported_confidence, 0.81);
+  assert.equal(compiled.confidence, undefined, "schema 2 must not expose self-reported confidence as trust");
   assert.equal(compiled.rationale, "Attribution should reach the compiled packet");
 
   // F1: no passed verifier finding backs this observation, so it must stay

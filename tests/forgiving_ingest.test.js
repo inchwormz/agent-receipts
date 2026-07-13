@@ -307,7 +307,7 @@ test("zero-burden: claims are harvested from natural prose with no protocol at a
   );
 });
 
-test("zero-burden: a harvested prose claim can still become a trusted fact once verified", (t) => {
+test("zero-burden: a self-authored verifier cannot promote harvested prose", (t) => {
   const runDir = freshRunDir("prose-promote");
   t.after(() => removeDir(runDir));
 
@@ -338,11 +338,12 @@ test("zero-burden: a harvested prose claim can still become a trusted fact once 
   const promoted = packet.trusted_facts.find(
     (f) => f.statement.includes("dispatcher") || (f.source_ids ?? []).includes("file:bin/receipts.mjs:70"),
   );
-  assert.ok(
-    promoted,
-    `a verifier-backed harvested claim must promote to trusted_facts; facts: ${JSON.stringify(packet.trusted_facts.map((f) => f.id))}`,
+  assert.equal(promoted, undefined, "unsigned verifier prose must remain attribution only");
+  const harvested = packet.evidence.find((item) => item.summary.includes("dispatcher"));
+  assert.equal(
+    packet.trust_assessments.find((item) => item.subject_id === harvested.id).claim_status,
+    "asserted",
   );
-  assert.equal(promoted.attestation, "verifier");
 });
 
 test("nonexistent file citation is downgraded to log:unverifiable, lane survives, record never a fact", (t) => {

@@ -14,6 +14,7 @@ const root = path.dirname(here);
 const COMMANDS = {
   init: { script: null, description: "Scaffold a minimal run directory (delegates to receipts-core binary)" },
   run: { script: null, description: "Execute a command and mint a tamper-evident execution receipt (delegates to receipts-core binary)" },
+  check: { script: null, description: "Run an engine-declared, subject-bound check (delegates to receipts-core binary)" },
   diff: { script: null, description: "Mint a WORK receipt of what changed in repo_root's tree (delegates to receipts-core binary)" },
   resolve: { script: null, description: "Record a hash-chained adjudication clearing a blocking worklist item (delegates to receipts-core binary)" },
   next: { script: null, description: "Print the compressed Prime brief for a run (delegates to receipts-core binary)" },
@@ -300,6 +301,7 @@ function run(command, args) {
       return cmdConclude(args);
     case "init":
     case "run":
+    case "check":
     case "diff":
     case "resolve":
     case "next": {

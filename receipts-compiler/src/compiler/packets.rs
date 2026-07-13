@@ -1,7 +1,8 @@
 use crate::compiler::evidence::{PacketValidationError, validate_packet_sources};
 use crate::schema::{
-    CandidateAction, CompiledFact, Contradiction, EvidenceRecord, HaltSignal, Hypothesis,
-    NextPassPacket, RECEIPTS_SCHEMA_VERSION, RecurringFailurePattern, SourceRef, VerifierFinding,
+    CandidateAction, CheckHistory, CompiledFact, Contradiction, EvidenceCoverage, EvidenceRecord,
+    HaltSignal, Hypothesis, NextPassPacket, RECEIPTS_SCHEMA_VERSION, ReceiptEvent,
+    RecurringFailurePattern, SourceRef, TrustAssessment, VerifierFinding,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +24,10 @@ pub struct CompilerInputBundle {
     pub halt_signals: Vec<HaltSignal>,
     pub sources: Vec<SourceRef>,
     pub lane_digests: Vec<crate::schema::LaneDigest>,
+    pub trust_assessments: Vec<TrustAssessment>,
+    pub receipt_events: Vec<ReceiptEvent>,
+    pub evidence_coverage: EvidenceCoverage,
+    pub check_histories: Vec<CheckHistory>,
 }
 
 pub fn build_next_pass_packet(
@@ -47,6 +52,10 @@ pub fn build_next_pass_packet(
         halt_signals: input.halt_signals,
         sources: input.sources,
         lane_digests: input.lane_digests,
+        trust_assessments: input.trust_assessments,
+        receipt_events: input.receipt_events,
+        evidence_coverage: Some(input.evidence_coverage),
+        check_histories: input.check_histories,
     };
 
     validate_packet_sources(&packet)?;
@@ -74,7 +83,7 @@ mod tests {
                 observed_at: "2026-04-21T00:00:00Z".to_string(),
                 agent_id: None,
                 lane: None,
-                confidence: None,
+                reported_confidence: None,
                 rationale: None,
                 diff_ref: None,
                 span_before: None,
@@ -118,6 +127,10 @@ mod tests {
                 observed_at: "2026-04-21T00:00:00Z".to_string(),
             }],
             lane_digests: vec![],
+            trust_assessments: vec![],
+            receipt_events: vec![],
+            evidence_coverage: crate::schema::EvidenceCoverage::default(),
+            check_histories: vec![],
         })
         .expect("valid packet");
 

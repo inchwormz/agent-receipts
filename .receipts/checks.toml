@@ -1,0 +1,31 @@
+manifest_version = 1
+
+[[checks]]
+id = "rust-suite"
+version = "1"
+command = ["cargo", "test", "--locked", "--manifest-path", "receipts-compiler/Cargo.toml"]
+covered_paths = [
+  "receipts-compiler/src/**/*.rs",
+  "receipts-compiler/tests/**/*.rs",
+  "receipts-compiler/schemas/*.json",
+  "receipts-compiler/Cargo.toml",
+  "receipts-compiler/Cargo.lock",
+]
+eligible_claim_kinds = ["code-change", "test-change", "root-cause"]
+environment_class = "local-rust"
+target_claims = ["claim:rust-suite"]
+
+[[checks]]
+id = "node-suite"
+version = "1"
+command = ["node", "--test"]
+covered_paths = [
+  "bin/**/*.mjs",
+  "scripts/**/*.mjs",
+  "tests/**/*.js",
+  "driver.mjs",
+  "package.json",
+]
+eligible_claim_kinds = ["code-change", "test-change", "root-cause"]
+environment_class = "local-node"
+target_claims = ["claim:node-suite"]

@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 
 /// Current Receipts packet schema version. Bump when the `NextPassPacket` or
 /// `Snapshot` shape changes in a way downstream consumers must react to.
-/// 1.2.0 (2026-07-13): worklist fields on candidate actions, lane_digests,
-/// work receipts. Consumers accept {1.1.0 legacy-read, 1.2.0 current}.
-pub const RECEIPTS_SCHEMA_VERSION: &str = "1.2.0";
+/// 2.0.0 (2026-07-14): engine-owned typed trust and diagnostic-only reported
+/// confidence. Consumers accept 1.1/1.2 as legacy read-only inputs.
+pub const RECEIPTS_SCHEMA_VERSION: &str = "2.0.0";
 
 /// Versions consumers must accept when reading packets.
-pub const RECEIPTS_KNOWN_SCHEMA_VERSIONS: &[&str] = &["1.1.0", "1.2.0"];
+pub const RECEIPTS_KNOWN_SCHEMA_VERSIONS: &[&str] = &["1.1.0", "1.2.0", "2.0.0"];
 
 /// Canonical hash algorithm label emitted for every `SourceRef.hash` value.
 /// The strict gate and ingester must reject source refs whose `hash_alg` does
@@ -44,7 +44,8 @@ pub struct SourceRef {
 pub struct CompiledFact {
     pub id: String,
     pub statement: String,
-    pub confidence: f32,
+    #[serde(default, alias = "confidence", skip_serializing_if = "Option::is_none")]
+    pub reported_confidence: Option<f32>,
     pub objective_relevance: f32,
     pub novelty_gain: f32,
     pub needs_raw_drilldown: bool,
@@ -69,8 +70,8 @@ pub struct EvidenceRecord {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lane: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
+    #[serde(default, alias = "confidence", skip_serializing_if = "Option::is_none")]
+    pub reported_confidence: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rationale: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,7 +96,8 @@ pub struct EvidenceRecord {
 pub struct Hypothesis {
     pub id: String,
     pub statement: String,
-    pub confidence: f32,
+    #[serde(default, alias = "confidence", skip_serializing_if = "Option::is_none")]
+    pub reported_confidence: Option<f32>,
     pub verifier_score: Option<f32>,
     pub source_ids: Vec<String>,
 }
@@ -212,6 +214,50 @@ pub struct LaneDigest {
     pub drill_down: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrustAssessment {
+    pub subject_id: String,
+    pub integrity: String,
+    pub outcome: String,
+    pub applicability: String,
+    pub claim_status: String,
+    pub verifier_independent: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReceiptEvent {
+    pub receipt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub integrity: String,
+    pub outcome: String,
+    pub exit_code: i64,
+    pub attempts_for_label: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct EvidenceCoverage {
+    pub total_claims: u32,
+    pub verified_claims: u32,
+    pub verifier_backed_claims: u32,
+    pub asserted_claims: u32,
+    pub refuted_claims: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CheckHistory {
+    pub check_id: String,
+    pub target_claims: Vec<String>,
+    pub first_result: String,
+    pub latest_result: String,
+    pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts_to_green: Option<u32>,
+    pub failure_signatures: Vec<String>,
+    pub transitions: Vec<String>,
+    pub flake_rate: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NextPassPacket {
     #[serde(default = "default_schema_version")]
@@ -236,6 +282,14 @@ pub struct NextPassPacket {
     /// packets.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lane_digests: Vec<LaneDigest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trust_assessments: Vec<TrustAssessment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receipt_events: Vec<ReceiptEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_coverage: Option<EvidenceCoverage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_histories: Vec<CheckHistory>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

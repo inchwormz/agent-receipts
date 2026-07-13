@@ -186,22 +186,46 @@ fn compute_scorecard(packet: &NextPassPacket) -> (usize, usize, usize, usize, us
 }
 
 fn render_scorecard(packet: &NextPassPacket) -> String {
-    let (attested, verifier, refuted, asserted, narrative, unstructured) =
-        compute_scorecard(packet);
-    let denom = attested + verifier + asserted;
-    let coverage_text = if denom == 0 {
+    let (
+        legacy_attested,
+        legacy_verifier,
+        legacy_refuted,
+        legacy_asserted,
+        narrative,
+        unstructured,
+    ) = compute_scorecard(packet);
+    let (verified, verifier_backed, asserted, refuted, total) = packet
+        .evidence_coverage
+        .as_ref()
+        .map(|coverage| {
+            (
+                coverage.verified_claims as usize,
+                coverage.verifier_backed_claims as usize,
+                coverage.asserted_claims as usize,
+                coverage.refuted_claims as usize,
+                coverage.total_claims as usize,
+            )
+        })
+        .unwrap_or((
+            legacy_attested,
+            legacy_verifier,
+            legacy_asserted,
+            legacy_refuted,
+            legacy_attested + legacy_verifier + legacy_asserted + legacy_refuted,
+        ));
+    let coverage_text = if total == 0 {
         "no substantive claims".to_string()
     } else {
-        let pct = ((attested as f64 / denom as f64) * 100.0).round() as i64;
-        format!("{pct}% attested")
+        let pct = (((verified + verifier_backed) as f64 / total as f64) * 100.0).round() as i64;
+        format!("{pct}% covered")
     };
 
     format!(
-        "<section class=\"scorecard\">\n<h2>Attestation scorecard</h2>\n\
-         <p class=\"coverage\">{coverage} <span class=\"raw\">({attested} attested, {verifier} verifier, {asserted} asserted; {narrative} narrative lines indexed)</span></p>\n\
+        "<section class=\"scorecard\">\n<h2>Evidence Coverage</h2>\n\
+         <p class=\"coverage\">{coverage} <span class=\"raw\">({verified} verified, {verifier_backed} verifier-backed, {asserted} asserted; {narrative} narrative lines indexed)</span></p>\n\
          <ul class=\"scorecard-counts\">\n\
-         <li>Attested: {attested}</li>\n\
-         <li>Verifier: {verifier}</li>\n\
+         <li>Verified: {verified}</li>\n\
+         <li>Verifier-backed: {verifier_backed}</li>\n\
          <li>Asserted: {asserted}</li>\n\
          <li>Narrative: {narrative}</li>\n\
          <li>Refuted: {refuted}</li>\n\
@@ -226,6 +250,50 @@ fn render_refutations(packet: &NextPassPacket) -> String {
             "<li><strong>{}</strong>: {}</li>\n",
             html_escape(&c.id),
             html_escape(&c.summary)
+        ));
+    }
+    out.push_str("</ul>\n</section>\n");
+    out
+}
+
+fn render_trust_findings(packet: &NextPassPacket) -> String {
+    let applicability: Vec<_> = packet
+        .trust_assessments
+        .iter()
+        .filter(|assessment| assessment.applicability != "current")
+        .collect();
+    let histories: Vec<_> = packet
+        .check_histories
+        .iter()
+        .filter(|history| history.attempts > 1 || history.latest_result != "passed")
+        .collect();
+    if applicability.is_empty() && histories.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "<section class=\"trust-findings\">\n<h2>Trust applicability</h2>\n<p><strong>report-only:</strong> stale and unbound findings are visible but do not independently fail the gate during migration.</p>\n<ul>\n",
+    );
+    for assessment in applicability {
+        out.push_str(&format!(
+            "<li><code>{}</code>: {} / {} / {}</li>\n",
+            html_escape(&assessment.subject_id),
+            html_escape(&assessment.applicability),
+            html_escape(&assessment.outcome),
+            html_escape(&assessment.claim_status),
+        ));
+    }
+    for history in histories {
+        out.push_str(&format!(
+            "<li><code>{}</code>: {} attempts; first {}, latest {}, attempts-to-green {}, flake rate {:.3}</li>\n",
+            html_escape(&history.check_id),
+            history.attempts,
+            html_escape(&history.first_result),
+            html_escape(&history.latest_result),
+            history
+                .attempts_to_green
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            history.flake_rate,
         ));
     }
     out.push_str("</ul>\n</section>\n");
@@ -584,6 +652,7 @@ pub fn render_report(
     html.push_str(&render_header(packet, receipts));
     html.push_str(&render_verdict_banner(gate));
     html.push_str(&render_scorecard(packet));
+    html.push_str(&render_trust_findings(packet));
     html.push_str(&render_refutations(packet));
     html.push_str(&render_worklist(packet));
     html.push_str(&render_work_scope(packet));
@@ -663,6 +732,10 @@ mod tests {
             halt_signals: vec![],
             sources: vec![],
             lane_digests: vec![],
+            trust_assessments: vec![],
+            receipt_events: vec![],
+            evidence_coverage: None,
+            check_histories: vec![],
         }
     }
 
@@ -676,7 +749,7 @@ mod tests {
             observed_at: "2026-07-12T00:00:00Z".to_string(),
             agent_id: None,
             lane: None,
-            confidence: None,
+            reported_confidence: None,
             rationale: None,
             diff_ref: None,
             span_before: None,
@@ -687,11 +760,12 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn fact(id: &str, attestation: &str) -> CompiledFact {
         CompiledFact {
             id: id.to_string(),
             statement: "Some statement".to_string(),
-            confidence: 0.8,
+            reported_confidence: Some(0.8),
             objective_relevance: 0.8,
             novelty_gain: 0.3,
             needs_raw_drilldown: false,
@@ -845,18 +919,77 @@ mod tests {
     }
 
     #[test]
-    fn coverage_math_two_attested_one_verifier_one_asserted() {
+    fn evidence_coverage_uses_typed_claim_counts() {
         let mut packet = empty_packet();
-        packet
-            .evidence
-            .push(evidence("ev-1", "observation", "asserted claim"));
-        packet.trusted_facts.push(fact("fact:ev-2", "attested"));
-        packet.trusted_facts.push(fact("fact:ev-3", "attested"));
-        packet.trusted_facts.push(fact("fact:ev-4", "verifier"));
+        packet.evidence_coverage = Some(crate::schema::EvidenceCoverage {
+            total_claims: 4,
+            verified_claims: 2,
+            verifier_backed_claims: 1,
+            asserted_claims: 1,
+            refuted_claims: 0,
+        });
         let html = render_report(&packet, &[], None);
+        assert!(html.contains("<h2>Evidence Coverage</h2>"), "{html}");
         assert!(
-            html.contains("50% attested"),
-            "expected 50% coverage: {html}"
+            html.contains("75% covered"),
+            "expected 75% coverage: {html}"
         );
+        assert!(
+            html.contains("2 verified, 1 verifier-backed, 1 asserted"),
+            "{html}"
+        );
+        assert!(
+            !html.contains("Attestation scorecard"),
+            "legacy title leaked: {html}"
+        );
+    }
+
+    #[test]
+    fn applicability_and_retry_findings_render_report_only() {
+        let mut packet = empty_packet();
+        packet.trust_assessments = vec![
+            crate::schema::TrustAssessment {
+                subject_id: "ev-stale".to_string(),
+                integrity: "hash_verified".to_string(),
+                outcome: "unknown".to_string(),
+                applicability: "stale".to_string(),
+                claim_status: "asserted".to_string(),
+                verifier_independent: false,
+            },
+            crate::schema::TrustAssessment {
+                subject_id: "ev-unbound".to_string(),
+                integrity: "hash_verified".to_string(),
+                outcome: "unknown".to_string(),
+                applicability: "unbound".to_string(),
+                claim_status: "asserted".to_string(),
+                verifier_independent: false,
+            },
+        ];
+        packet.check_histories = vec![crate::schema::CheckHistory {
+            check_id: "retry-check".to_string(),
+            target_claims: vec!["ev-stale".to_string()],
+            first_result: "failed".to_string(),
+            latest_result: "passed".to_string(),
+            attempts: 2,
+            attempts_to_green: Some(2),
+            failure_signatures: vec!["blake3:abc".to_string()],
+            transitions: vec!["failed->passed".to_string()],
+            flake_rate: 0.5,
+        }];
+        let html = render_report(&packet, &[], None);
+        assert!(html.contains("Trust applicability"), "{html}");
+        assert!(
+            html.contains("ev-stale") && html.contains("stale"),
+            "{html}"
+        );
+        assert!(
+            html.contains("ev-unbound") && html.contains("unbound"),
+            "{html}"
+        );
+        assert!(
+            html.contains("retry-check") && html.contains("2 attempts"),
+            "{html}"
+        );
+        assert!(html.contains("report-only"), "{html}");
     }
 }

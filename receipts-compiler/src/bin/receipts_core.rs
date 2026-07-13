@@ -64,6 +64,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let rest: Vec<String> = args.collect();
             run_with_receipt(rest)
         }
+        "check" => {
+            let rest: Vec<String> = args.collect();
+            check_with_binding(rest)
+        }
         "diff" => {
             let rest: Vec<String> = args.collect();
             diff_with_receipt(rest)
@@ -123,6 +127,9 @@ COMMANDS:
     run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] --exe <program> [--arg <token>]...
                             Execute a command and mint a tamper-evident execution
                             receipt in receipts/receipts.jsonl (exit code = child's)
+    check --run-dir <dir> --id <check-id>
+                            Execute an engine-declared .receipts/checks.toml check
+                            and bind it to exact subject, lock, environment, and claims
     diff --run-dir <dir> [--note <text>] [--patch]
                             Mint a WORK receipt: what changed in repo_root's tree
                             (numstat summary by default; --patch embeds the full
@@ -347,6 +354,35 @@ fn run_with_receipt(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         })
     );
     std::process::exit(exit_code as i32);
+}
+
+fn check_with_binding(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let run_dir = PathBuf::from(
+        parse_flag_value(&args, "--run-dir").ok_or("`check` requires --run-dir <dir>")?,
+    );
+    let check_id = parse_flag_value(&args, "--id").ok_or("`check` requires --id <check-id>")?;
+    preflight_run_dir(&run_dir)?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(run_dir.join("manifest.json"))?)?;
+    let repo_root = PathBuf::from(
+        manifest["repo_root"]
+            .as_str()
+            .ok_or("`check` requires repo_root in manifest.json")?,
+    );
+    let checks = receipts_core::compiler::checks::load_manifest(&repo_root)?
+        .ok_or("repo_root has no .receipts/checks.toml")?;
+    let check = receipts_core::compiler::checks::find_check(&checks, &check_id)?;
+    let attempt = receipts_core::compiler::checks::run_check(
+        &run_dir,
+        &repo_root,
+        check,
+        &format!("receipts-core/{VERSION}"),
+    )?;
+    println!("{}", serde_json::to_string(&attempt)?);
+    if attempt.outcome != "passed" {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 fn parse_run_invocation(

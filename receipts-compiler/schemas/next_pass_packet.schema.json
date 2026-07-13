@@ -23,7 +23,7 @@
     "sources"
   ],
   "properties": {
-    "schema_version": { "type": "string", "enum": ["1.1.0", "1.2.0"] },
+    "schema_version": { "type": "string", "enum": ["1.1.0", "1.2.0", "2.0.0"] },
     "objective_id": { "type": "string" },
     "run_id": { "type": "string" },
     "branch_id": { "type": "string" },
@@ -76,6 +76,21 @@
     "lane_digests": {
       "type": "array",
       "items": { "$ref": "#/$defs/laneDigest" }
+    },
+    "trust_assessments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/trustAssessment" }
+    },
+    "receipt_events": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/receiptEvent" }
+    },
+    "evidence_coverage": {
+      "$ref": "#/$defs/evidenceCoverage"
+    },
+    "check_histories": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/checkHistory" }
     }
   },
   "additionalProperties": false,
@@ -100,7 +115,6 @@
       "required": [
         "id",
         "statement",
-        "confidence",
         "objective_relevance",
         "novelty_gain",
         "needs_raw_drilldown",
@@ -109,7 +123,7 @@
       "properties": {
         "id": { "type": "string" },
         "statement": { "type": "string" },
-        "confidence": { "type": "number" },
+        "reported_confidence": { "type": "number" },
         "objective_relevance": { "type": "number" },
         "novelty_gain": { "type": "number" },
         "needs_raw_drilldown": { "type": "boolean" },
@@ -145,7 +159,7 @@
         "observed_at": { "type": "string" },
         "agent_id": { "type": "string" },
         "lane": { "type": "string" },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reported_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
         "rationale": { "type": "string" },
         "diff_ref": { "type": "string" },
         "span_before": { "type": "string" },
@@ -161,11 +175,11 @@
     },
     "hypothesis": {
       "type": "object",
-      "required": ["id", "statement", "confidence", "verifier_score", "source_ids"],
+      "required": ["id", "statement", "verifier_score", "source_ids"],
       "properties": {
         "id": { "type": "string" },
         "statement": { "type": "string" },
-        "confidence": { "type": "number" },
+        "reported_confidence": { "type": "number" },
         "verifier_score": { "type": ["number", "null"] },
         "source_ids": {
           "type": "array",
@@ -301,6 +315,60 @@
           "type": "array",
           "items": { "type": "string" }
         }
+      },
+      "additionalProperties": false
+    },
+    "trustAssessment": {
+      "type": "object",
+      "required": ["subject_id", "integrity", "outcome", "applicability", "claim_status", "verifier_independent"],
+      "properties": {
+        "subject_id": { "type": "string" },
+        "integrity": { "type": "string", "enum": ["signed", "hash_verified", "legacy_weak", "invalid"] },
+        "outcome": { "type": "string", "enum": ["passed", "failed", "expected_failure", "unknown"] },
+        "applicability": { "type": "string", "enum": ["current", "stale", "environment_mismatch", "unbound"] },
+        "claim_status": { "type": "string", "enum": ["verified", "verifier_backed", "asserted", "refuted", "unknown"] },
+        "verifier_independent": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "receiptEvent": {
+      "type": "object",
+      "required": ["receipt_id", "integrity", "outcome", "exit_code", "attempts_for_label"],
+      "properties": {
+        "receipt_id": { "type": "string" },
+        "label": { "type": "string" },
+        "integrity": { "type": "string", "enum": ["signed", "hash_verified", "legacy_weak", "invalid"] },
+        "outcome": { "type": "string", "enum": ["passed", "failed", "expected_failure", "unknown"] },
+        "exit_code": { "type": "integer" },
+        "attempts_for_label": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "evidenceCoverage": {
+      "type": "object",
+      "required": ["total_claims", "verified_claims", "verifier_backed_claims", "asserted_claims", "refuted_claims"],
+      "properties": {
+        "total_claims": { "type": "integer", "minimum": 0 },
+        "verified_claims": { "type": "integer", "minimum": 0 },
+        "verifier_backed_claims": { "type": "integer", "minimum": 0 },
+        "asserted_claims": { "type": "integer", "minimum": 0 },
+        "refuted_claims": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "checkHistory": {
+      "type": "object",
+      "required": ["check_id", "target_claims", "first_result", "latest_result", "attempts", "failure_signatures", "transitions", "flake_rate"],
+      "properties": {
+        "check_id": { "type": "string" },
+        "target_claims": { "type": "array", "items": { "type": "string" } },
+        "first_result": { "type": "string", "enum": ["passed", "failed"] },
+        "latest_result": { "type": "string", "enum": ["passed", "failed"] },
+        "attempts": { "type": "integer", "minimum": 1 },
+        "attempts_to_green": { "type": "integer", "minimum": 1 },
+        "failure_signatures": { "type": "array", "items": { "type": "string" } },
+        "transitions": { "type": "array", "items": { "type": "string" } },
+        "flake_rate": { "type": "number", "minimum": 0, "maximum": 1 }
       },
       "additionalProperties": false
     },

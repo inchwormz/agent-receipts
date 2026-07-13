@@ -82,7 +82,7 @@ function mtimeMs(file) {
 }
 
 function inputFiles(runDir) {
-  const inputDirs = ["raw", "worker-results", "verifier-results", "receipts", "decisions"];
+  const inputDirs = ["raw", "worker-results", "verifier-results", "receipts", "decisions", "checks"];
   return [
     path.join(runDir, "manifest.json"),
     path.join(runDir, "task.md"),

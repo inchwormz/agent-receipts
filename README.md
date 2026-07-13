@@ -22,7 +22,7 @@ Every team running agents has lived this, and the bill arrives later. An unverif
 
 Reading every transcript doesn't scale. Asking agents to be more honest is not a mechanism.
 
-Agent Receipts is the mechanism. The orchestrator mints **hash-chained execution receipts** for every command that matters. Claims that cite a passing receipt get promoted to **attested facts**. Claims contradicted by a failing receipt are **mechanically refuted** and the run goes red. Everything else stays labeled as hearsay. Your agents don't have to cooperate, follow a format, or even know receipts exist. And the orchestrator reads a compressed brief of proven facts, a few hundred tokens, so its context stays free for the work only it can do.
+Agent Receipts is the mechanism. The engine records command execution as **hash-chained receipt events**, then verifies claims only through checks declared in `.receipts/checks.toml` and bound to exact subject bytes, dependency locks, environment, check version, and target claim. A passing command label alone never promotes a semantic claim. A relevant change makes an old green stale automatically. Everything else stays visibly asserted. Your agents don't have to cooperate, follow a format, or even know receipts exist.
 
 ---
 
@@ -37,9 +37,8 @@ receipts init .receipts/runs/fix-login
 receipts absorb --run-dir .receipts/runs/fix-login \
   --lane backend --agent-id sonnet-1 --from lane-report.md
 
-# Never trust "tests pass". Mint the proof yourself:
-receipts run --run-dir .receipts/runs/fix-login \
-  --label test:suite -- npm test
+# Run the engine-owned, subject-bound check:
+receipts check --run-dir .receipts/runs/fix-login --id login-suite
 
 # Close the pass. Exit code 0 = the gate is green.
 receipts conclude --run-dir .receipts/runs/fix-login \
@@ -47,6 +46,21 @@ receipts conclude --run-dir .receipts/runs/fix-login \
 ```
 
 `conclude` prints a compressed brief: what is proven, what is claimed, what is refuted, and exactly what needs your judgment. That brief is what you read. Not the transcripts.
+
+Checks are tokenized—no shell string—and declare what they cover and which claims they may verify:
+
+```toml
+manifest_version = 1
+
+[[checks]]
+id = "login-suite"
+version = "1"
+command = ["node", "--test"]
+covered_paths = ["src/login/**/*.js", "tests/login/**/*.js", "package-lock.json"]
+eligible_claim_kinds = ["code-change", "test-change"]
+environment_class = "local-node"
+target_claims = ["ev-login-fix"]
+```
 
 ## How trust gets made
 
@@ -60,7 +74,7 @@ flowchart LR
 
     subgraph engine["Agent Receipts engine"]
         ING["absorb<br/><i>forgiving ingest +<br/>work receipt</i>"]
-        RUN["receipts run<br/><i>mints hash-chained<br/>execution receipts</i>"]
+        RUN["receipts check<br/><i>binds result to subject,<br/>lock, environment + claim</i>"]
         COMP["compile<br/><i>deterministic packet,<br/>every claim sourced</i>"]
         GATE["gate<br/><i>fail-closed verdict</i>"]
     end
@@ -71,24 +85,24 @@ flowchart LR
     ING --> COMP
     RUN --> COMP
     COMP --> GATE
-    GATE -->|"exit 0"| GREEN["✅ attested facts<br/>you can repeat"]
+    GATE -->|"exit 0"| GREEN["✅ verified claims<br/>you can repeat"]
     GATE -->|"exit 1"| RED["🚫 named refutations<br/>+ a worklist"]
 ```
 
 The runtime is a thin `receipts` Node dispatcher over the bundled `receipts-core` Rust engine. The dispatcher builds that exact source and verifies its protocol, build commit, dependency lock, platform, and binary digest before execution; ambient `PATH` binaries are ignored. No server, no accounts, no telemetry. Runs are plain directories you can read, diff, and commit.
 
-## The trust ladder
+## Typed trust
 
-Every statement in a run lands on exactly one rung, and the report never lets a lower rung dress up as a higher one.
+Schema `2.0.0` never collapses “observed,” “passed,” “still applies,” and “independently verified” into one confidence score.
 
-| Tier | Meaning | Who can create it |
-| --- | --- | --- |
-| **attested** | The runtime watched it happen. Receipt-backed: command, exit code, hashed output, tree state. | Only the runtime. Agents cannot mint, forge, or edit receipts. |
-| **verifier** | A verifier lane checked it and its finding passed the gate's provenance rules. | Verifier lanes, with citations. |
-| **asserted** | A load-bearing claim ("I changed X", "root cause is Y") with no proof yet. Listed, never trusted. | Any agent. |
-| **narrative** | Prose that mentions files without claiming anything checkable. Indexed for drill-down. | Any agent. |
+| Dimension | Values |
+| --- | --- |
+| **integrity** | `signed`, `hash_verified`, `legacy_weak`, `invalid` |
+| **outcome** | `passed`, `failed`, `expected_failure`, `unknown` |
+| **applicability** | `current`, `stale`, `environment_mismatch`, `unbound` |
+| **claim status** | `verified`, `verifier_backed`, `asserted`, `refuted`, `unknown` |
 
-When your agent's "all tests pass" cites the label `test:suite` and your receipt for `test:suite` shows exit 0, the claim climbs to attested. When your receipt shows exit 1, the claim is refuted by name and the gate goes red. When there is no receipt at all, the claim sits at asserted, visibly, until you mint one.
+Agent-supplied confidence survives only as `reported_confidence`; it never changes promotion, gates, reports, or later statistics. Receipt events are shown separately from Evidence Coverage. Self-authored verifier prose and caller-supplied lane names are attribution, not independence.
 
 ## What it catches
 
@@ -104,7 +118,7 @@ Every row links to the red-team test in this repo that proves it. The marketing 
 | tries to overwrite a stored artifact | Content-address collision with different bytes is a hard error | [receipts.rs tests](./receipts-compiler/src/compiler/receipts.rs) |
 | claims to be a different agent | Caller-assigned identity wins; the self-claimed one is quarantined as `claimed_*` | [m0_trust_semantics.test.js](./tests/m0_trust_semantics.test.js) |
 | reports in shorthand, broken JSON, or pure prose | Repaired or harvested into cited records; nothing is rejected for format | [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) |
-| mints a work receipt to look productive | Work receipts attest tree state only; they can never upgrade a claim | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
+| mints a work receipt to look productive | Work receipts remain execution events; they can never upgrade a claim | [receipts_attestation.test.js](./tests/receipts_attestation.test.js) |
 | leaves the run blocked on a judgment call | Blocking worklist item; cleared only by a hash-chained, auditable resolution | [worklist_resolutions.test.js](./tests/worklist_resolutions.test.js) |
 
 ## The moment it pays for itself
@@ -116,8 +130,8 @@ sequenceDiagram
     participant Engine as Receipts engine
     Lane->>Prime: Refactor done. cargo test all green.
     Prime->>Engine: receipts absorb (lane report, verbatim)
-    Prime->>Engine: receipts run --label test cargo -- cargo test
-    Engine-->>Prime: receipt rcpt-0007 exits 1
+    Prime->>Engine: receipts check --id cargo-suite
+    Engine-->>Prime: bound check attempt exits 1
     Prime->>Engine: receipts conclude
     Engine-->>Prime: GATE RED, claim refuted by rcpt-0007
 ```
@@ -131,7 +145,7 @@ This is the design constraint everything else serves: **you cannot change agent 
 - Lane briefs are task-only. You never send format instructions, schemas, or protocol.
 - Ingest accepts anything. Fenced records if the agent emitted them (liberally repaired), otherwise claims are harvested from natural prose: any sentence citing a path or `file.ext:line` becomes its own record with a hash-verified citation and a drill-down span back into the original text.
 - Repairs are free and logged. Demotion is reserved for semantic problems (citations that don't resolve, impersonation), never for formatting.
-- The one thing agents can't do is manufacture trust. Extraction never promotes; only receipts and gated verifier findings do.
+- The one thing agents can't do is manufacture trust. Extraction never promotes; only a current engine-owned check binding or, once signatures are enabled, a different authenticated verifier principal can do that.
 
 An earlier version of this engine demanded format compliance from agents. In its first real fleet test, agents drifted into shorthand, the orchestrator escalated format demands, and the whole run collapsed into "no receipts required". That failure is preserved in the test suite as the wreckage it was, and the engine was rebuilt around accepting it: [forgiving_ingest.test.js](./tests/forgiving_ingest.test.js) replays real broken lane output from that night.
 
@@ -143,13 +157,17 @@ VERDICT: GATE PASSED
 
 WORKLIST (0 blocking, 0 advisory, 0 resolved)
 
-TRUSTED FACTS (4 attested, 0 verifier)
-  [attested] receipts run: `npm test` exited 0 in 6281ms [attests test:suite]
-  [attested] receipts run: `cargo test` exited 0 in 941ms [attests test:cargo]
-  [attested] work: 9 files changed +214/-38 in window rcpt-0001..rcpt-0003
+EVIDENCE COVERAGE: 2/3 verified; 1 asserted
+
+CHECK HISTORY
+  login-suite: first failed, latest passed, attempts-to-green 2, flake rate 0.50
+
+RECEIPT EVENTS
+  rcpt-0001: exit 1
+  rcpt-0002: exit 0
 
 LANE DIGESTS
-  backend (sonnet-1): 11 records - 2 attested / 9 narrative - read-unverified
+  backend (sonnet-1): 11 records - 2 verified / 9 asserted - read-unverified
     drill-down: raw:subagents/backend.md:12-40
 ```
 
@@ -211,7 +229,7 @@ A trust tool that hides its own gaps is broken at the root, so here are ours, in
 
 ## FAQ
 
-**Does this slow my agents down?** No. Agents receive nothing and change nothing. The cost lives with the orchestrator: one `absorb` per lane report, one `run` per check you already wanted proof of, one `conclude` per pass.
+**Does this slow my agents down?** No. Agents receive nothing and change nothing. The cost lives with the orchestrator: one `absorb` per lane report, one declared `check` per verification you already wanted, one `conclude` per pass.
 
 **What if my agent writes garbage?** Garbage ingests fine. Prose is harvested, JSON is repaired, and the truly unstructurable becomes a single quarantined record that can never be mistaken for evidence.
 

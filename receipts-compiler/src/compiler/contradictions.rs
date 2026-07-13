@@ -278,7 +278,7 @@ mod tests {
             observed_at: "2026-04-21T00:00:00Z".to_string(),
             agent_id: agent.map(|s| s.to_string()),
             lane: lane.map(|s| s.to_string()),
-            confidence: None,
+            reported_confidence: None,
             rationale: None,
             diff_ref: None,
             span_before: None,

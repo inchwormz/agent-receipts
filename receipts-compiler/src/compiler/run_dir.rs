@@ -1,6 +1,9 @@
 use crate::compiler::artifacts::ArtifactRef;
+use crate::compiler::checks::{
+    CheckAttemptRecord, ClaimBinding, build_check_histories, claim_binding, load_verified_attempts,
+    verify_attempt_receipts,
+};
 use crate::compiler::contradictions::detect_auto_contradictions;
-use crate::compiler::evidence::is_direct_source_id;
 use crate::compiler::journal::append_decision_log;
 use crate::compiler::packets::{CompilerInputBundle, build_next_pass_packet};
 use crate::compiler::receipts::load_verified_receipts;
@@ -8,9 +11,9 @@ use crate::compiler::resolutions::{ResolutionRecord, load_verified_resolutions};
 use crate::compiler::signals::detect_recurring_failure_patterns;
 use crate::compiler::snapshot::build_snapshot;
 use crate::schema::{
-    CandidateAction, CompiledFact, Contradiction, DecisionLogRecord, EvidenceRecord, HaltSignal,
-    Hypothesis, RECEIPTS_HASH_ALG, ReceiptRecord, SnapshotInput, SourceRef, StateDelta,
-    VerifierFinding, WorkerResult,
+    CandidateAction, CompiledFact, Contradiction, DecisionLogRecord, EvidenceCoverage,
+    EvidenceRecord, HaltSignal, Hypothesis, RECEIPTS_HASH_ALG, ReceiptEvent, ReceiptRecord,
+    SnapshotInput, SourceRef, StateDelta, TrustAssessment, VerifierFinding, WorkerResult,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -64,17 +67,15 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
     // refute claims below. WORK receipts (label work:tree) attest tree state
     // only - they are partitioned out of every claim-attestation path.
     let receipts = load_verified_receipts(run_dir)?;
-    let (work_receipts, exec_receipts): (Vec<&ReceiptRecord>, Vec<&ReceiptRecord>) =
+    let check_attempts = load_verified_attempts(run_dir)?;
+    verify_attempt_receipts(&check_attempts, &receipts)?;
+    let check_histories = build_check_histories(&check_attempts);
+    let (_work_receipts, exec_receipts): (Vec<&ReceiptRecord>, Vec<&ReceiptRecord>) =
         receipts.iter().partition(|receipt| {
             receipt.label.as_deref() == Some(crate::compiler::receipts::WORK_LABEL)
         });
     let exec_receipts: Vec<ReceiptRecord> = exec_receipts.into_iter().cloned().collect();
-    worker_evidence.extend(exec_receipts.iter().map(receipt_evidence_record));
-    worker_evidence.extend(
-        work_receipts
-            .iter()
-            .map(|receipt| work_evidence_record(run_dir, receipt, &receipts)),
-    );
+    let receipt_events = build_receipt_events(&receipts, &check_attempts);
 
     let mut sources = raw_sources.clone();
     sources.extend(receipts.iter().map(receipt_source_ref));
@@ -131,14 +132,31 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
     // F1 + M2: trusted_facts are GATED, not relabeled evidence. Receipt-backed
     // records promote as "attested"; verifier-backed as "verifier"; everything
     // else stays in the evidence section. Only EXEC receipts participate.
+    let repo_root_path = manifest.repo_root.as_deref().map(Path::new);
+    let claim_bindings: HashMap<String, ClaimBinding> = worker_evidence
+        .iter()
+        .map(|record| {
+            Ok((
+                record.id.clone(),
+                claim_binding(repo_root_path, &record.id, &record.kind, &check_attempts)?,
+            ))
+        })
+        .collect::<Result<_, Box<dyn std::error::Error>>>()?;
     let trusted_facts = facts_from_evidence(
         &worker_evidence,
         &verifier_findings,
         &auto_contradictions,
-        &exec_receipts,
+        &claim_bindings,
     );
 
     let trusted_facts_for_digests = trusted_facts.clone();
+    let trust_assessments = build_trust_assessments(
+        &worker_evidence,
+        &trusted_facts,
+        &auto_contradictions,
+        &claim_bindings,
+    );
+    let evidence_coverage = compute_evidence_coverage(&worker_evidence, &trust_assessments);
 
     // Phase 2: the derived worklist replaces template candidate_actions.
     // Resolutions (Prime's typed adjudications, hash-chained) clear blocking
@@ -174,6 +192,10 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
             &auto_contradictions,
             &exec_receipts,
         ),
+        trust_assessments,
+        receipt_events,
+        evidence_coverage,
+        check_histories,
     })?;
 
     let state_dir = run_dir.join("state");
@@ -230,7 +252,7 @@ struct FingerprintEntry {
 }
 
 /// Mirrors the JS `inputFingerprint` shape exactly: manifest.json, task.md,
-/// and every file under raw/, worker-results/, verifier-results/, sorted by
+/// and every file under the input journals (including checks/), sorted by
 /// absolute path string, each entry carrying run-dir-relative forward-slash
 /// path, byte size, and fnv1a-64 content hash.
 fn write_input_fingerprint(
@@ -250,6 +272,7 @@ fn write_input_fingerprint(
         "verifier-results",
         "receipts",
         "decisions",
+        "checks",
     ] {
         collect_files_recursive(&run_dir.join(dir), &mut files)?;
     }
@@ -714,9 +737,47 @@ fn receipt_source_ref(receipt: &ReceiptRecord) -> SourceRef {
     }
 }
 
+fn build_receipt_events(
+    receipts: &[ReceiptRecord],
+    check_attempts: &[CheckAttemptRecord],
+) -> Vec<ReceiptEvent> {
+    let mut attempts: HashMap<String, u32> = HashMap::new();
+    let expected_failures: BTreeSet<&str> = check_attempts
+        .iter()
+        .filter(|attempt| attempt.negative_control_outcome.as_deref() == Some("expected_failure"))
+        .filter_map(|attempt| attempt.negative_control_receipt_id.as_deref())
+        .collect();
+    receipts
+        .iter()
+        .map(|receipt| {
+            let key = receipt
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("receipt:{}", receipt.id));
+            let attempt = attempts.entry(key).or_insert(0);
+            *attempt += 1;
+            ReceiptEvent {
+                receipt_id: receipt.id.clone(),
+                label: receipt.label.clone(),
+                integrity: "hash_verified".to_string(),
+                outcome: if expected_failures.contains(receipt.id.as_str()) {
+                    "expected_failure".to_string()
+                } else if receipt.exit_code == 0 {
+                    "passed".to_string()
+                } else {
+                    "failed".to_string()
+                },
+                exit_code: receipt.exit_code,
+                attempts_for_label: *attempt,
+            }
+        })
+        .collect()
+}
+
 /// One runtime-authored evidence record per receipt. Agents cannot write
 /// these (ingest downgrades impersonations); they enter the packet straight
 /// from the verified journal.
+#[allow(dead_code)]
 fn receipt_evidence_record(receipt: &ReceiptRecord) -> EvidenceRecord {
     let label_note = receipt
         .label
@@ -738,7 +799,7 @@ fn receipt_evidence_record(receipt: &ReceiptRecord) -> EvidenceRecord {
         observed_at: receipt.ended_at.clone(),
         agent_id: receipt.agent_id.clone(),
         lane: receipt.lane.clone(),
-        confidence: Some(1.0),
+        reported_confidence: None,
         rationale: None,
         diff_ref: None,
         span_before: receipt.tree_before.clone(),
@@ -754,6 +815,7 @@ fn receipt_evidence_record(receipt: &ReceiptRecord) -> EvidenceRecord {
 /// work receipt - never a lane name; review finding 6). Stats come from the
 /// receipt's content-addressed artifact; the optional note is agent/Prime
 /// prose and lands in `rationale` (asserted-tier annotation only).
+#[allow(dead_code)]
 fn work_evidence_record(
     run_dir: &Path,
     receipt: &ReceiptRecord,
@@ -813,7 +875,7 @@ fn work_evidence_record(
         observed_at: receipt.ended_at.clone(),
         agent_id: receipt.agent_id.clone(),
         lane: receipt.lane.clone(),
-        confidence: Some(1.0),
+        reported_confidence: None,
         rationale: note,
         diff_ref: None,
         span_before: receipt.tree_before.clone(),
@@ -884,59 +946,27 @@ fn detect_receipt_refutations(
 /// kind - except runtime receipt records, which are attested by construction.
 fn facts_from_evidence(
     evidence: &[EvidenceRecord],
-    findings: &[VerifierFinding],
+    _findings: &[VerifierFinding],
     contradictions: &[Contradiction],
-    receipts: &[ReceiptRecord],
+    claim_bindings: &HashMap<String, ClaimBinding>,
 ) -> Vec<CompiledFact> {
     let contradicted: BTreeSet<&str> = contradictions
         .iter()
         .flat_map(|item| item.conflicting_item_ids.iter().map(String::as_str))
         .collect();
 
-    let valid_receipt_ids: BTreeSet<String> = receipts
-        .iter()
-        .map(|receipt| format!("receipt:{}", receipt.id))
-        .collect();
-    let passing_labels: BTreeSet<&str> = latest_receipt_per_label(receipts)
-        .into_iter()
-        .filter(|(_, receipt)| receipt.exit_code == 0)
-        .map(|(label, _)| label)
-        .collect();
-
-    let mut passing_direct_sources: BTreeSet<&str> = BTreeSet::new();
-    let mut verified_evidence_ids: BTreeSet<&str> = BTreeSet::new();
-    for finding in findings.iter().filter(|finding| finding.status == "passed") {
-        for source_id in &finding.source_ids {
-            if is_direct_source_id(source_id) {
-                passing_direct_sources.insert(source_id.as_str());
-            } else if let Some(evidence_id) = source_id.strip_prefix("evidence:") {
-                verified_evidence_ids.insert(evidence_id);
-            }
-        }
-    }
-
     evidence
         .iter()
-        .filter(|item| {
-            item.kind == "receipt"
-                || item.kind == "work"
-                || !NON_FACT_KINDS.contains(&item.kind.as_str())
-        })
+        .filter(|item| !NON_FACT_KINDS.contains(&item.kind.as_str()))
         .filter(|item| item.provenance_warnings.is_empty())
         .filter(|item| !contradicted.contains(item.id.as_str()))
         .filter_map(|item| {
-            // "receipt" and "work" records are runtime-authored from the
-            // verified journal - attested by construction.
-            let attested = item.kind == "receipt"
-                || item.kind == "work"
-                || item.source_ids.iter().any(|id| {
-                    valid_receipt_ids.contains(id) || passing_labels.contains(id.as_str())
-                });
-            let verifier_backed = verified_evidence_ids.contains(item.id.as_str())
-                || item
-                    .source_ids
-                    .iter()
-                    .any(|id| passing_direct_sources.contains(id.as_str()));
+            let attested = claim_bindings.get(&item.id).is_some_and(|binding| {
+                binding.applicability == "current" && binding.outcome == "passed"
+            });
+            // Raw verifier findings are agent input. They can promote only
+            // after a different executor principal supplies a valid signature.
+            let verifier_backed = false;
             let attestation = if attested {
                 "attested"
             } else if verifier_backed {
@@ -947,7 +977,7 @@ fn facts_from_evidence(
             Some(CompiledFact {
                 id: format!("fact:{}", item.id),
                 statement: item.summary.clone(),
-                confidence: item.confidence.map(|value| value as f32).unwrap_or(0.7),
+                reported_confidence: item.reported_confidence.map(|value| value as f32),
                 objective_relevance: 0.8,
                 novelty_gain: 0.3,
                 needs_raw_drilldown: false,
@@ -956,6 +986,91 @@ fn facts_from_evidence(
             })
         })
         .collect()
+}
+
+const LOAD_BEARING_CLAIM_KINDS: &[&str] = &["code-change", "test-change", "root-cause"];
+
+fn is_coverage_claim(record: &EvidenceRecord) -> bool {
+    !NON_FACT_KINDS.contains(&record.kind.as_str())
+        && !(record.rationale.as_deref() == Some("harvested-from-prose")
+            && !LOAD_BEARING_CLAIM_KINDS.contains(&record.kind.as_str()))
+}
+
+fn build_trust_assessments(
+    evidence: &[EvidenceRecord],
+    facts: &[CompiledFact],
+    contradictions: &[Contradiction],
+    claim_bindings: &HashMap<String, ClaimBinding>,
+) -> Vec<TrustAssessment> {
+    let fact_by_subject: HashMap<&str, &CompiledFact> = facts
+        .iter()
+        .filter_map(|fact| fact.id.strip_prefix("fact:").map(|id| (id, fact)))
+        .collect();
+    let refuted: BTreeSet<&str> = contradictions
+        .iter()
+        .flat_map(|item| item.conflicting_item_ids.iter().map(String::as_str))
+        .collect();
+
+    evidence
+        .iter()
+        .map(|record| {
+            let fact = fact_by_subject.get(record.id.as_str()).copied();
+            let binding = claim_bindings.get(&record.id);
+            let claim_status = if refuted.contains(record.id.as_str()) {
+                "refuted"
+            } else if binding
+                .is_some_and(|value| value.applicability == "current" && value.outcome == "failed")
+            {
+                "refuted"
+            } else {
+                match fact.and_then(|value| value.attestation.as_deref()) {
+                    Some("attested") => "verified",
+                    Some("verifier") => "verifier_backed",
+                    _ => "asserted",
+                }
+            };
+            TrustAssessment {
+                subject_id: record.id.clone(),
+                integrity: if record.provenance_warnings.is_empty() {
+                    "hash_verified".to_string()
+                } else {
+                    "invalid".to_string()
+                },
+                outcome: binding
+                    .map(|value| value.outcome.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                applicability: binding
+                    .map(|value| value.applicability.clone())
+                    .unwrap_or_else(|| "unbound".to_string()),
+                claim_status: claim_status.to_string(),
+                verifier_independent: false,
+            }
+        })
+        .collect()
+}
+
+fn compute_evidence_coverage(
+    evidence: &[EvidenceRecord],
+    assessments: &[TrustAssessment],
+) -> EvidenceCoverage {
+    let by_subject: HashMap<&str, &TrustAssessment> = assessments
+        .iter()
+        .map(|assessment| (assessment.subject_id.as_str(), assessment))
+        .collect();
+    let mut coverage = EvidenceCoverage::default();
+    for record in evidence.iter().filter(|record| is_coverage_claim(record)) {
+        coverage.total_claims += 1;
+        match by_subject
+            .get(record.id.as_str())
+            .map(|assessment| assessment.claim_status.as_str())
+        {
+            Some("verified") => coverage.verified_claims += 1,
+            Some("verifier_backed") => coverage.verifier_backed_claims += 1,
+            Some("refuted") => coverage.refuted_claims += 1,
+            _ => coverage.asserted_claims += 1,
+        }
+    }
+    coverage
 }
 
 /// Phase 3: per-lane reading guidance. Conservative rules (review finding 5):
@@ -1270,7 +1385,7 @@ fn hypotheses_from_failures(findings: &[VerifierFinding]) -> Vec<Hypothesis> {
         .map(|finding| Hypothesis {
             id: format!("hypothesis:{}", finding.id),
             statement: format!("Resolve verifier finding: {}", finding.summary),
-            confidence: 0.6,
+            reported_confidence: None,
             verifier_score: Some(finding.verifier_score),
             source_ids: finding.source_ids.clone(),
         })
@@ -1422,21 +1537,17 @@ mod tests {
         assert_eq!(packet.schema_version, RECEIPTS_SCHEMA_VERSION);
         assert!(!packet.sources.is_empty(), "packet must include sources");
 
-        // F1: the fixture's vf-1 (passed) cites evidence:ev-2, so ev-2 — and
-        // ONLY ev-2 — earns trusted-fact status, stamped with its tier.
+        // Schema 2: raw verifier input is self-authored and unsigned. It is
+        // useful attribution, but cannot promote a claim without a different
+        // authenticated executor principal.
+        assert!(packet.trusted_facts.is_empty());
         assert_eq!(
             packet
-                .trusted_facts
+                .trust_assessments
                 .iter()
-                .map(|fact| fact.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["fact:ev-2"],
-            "only verifier-backed evidence may promote to trusted_facts"
-        );
-        assert_eq!(
-            packet.trusted_facts[0].attestation.as_deref(),
-            Some("verifier"),
-            "promoted facts must carry their attestation tier"
+                .find(|assessment| assessment.subject_id == "ev-2")
+                .map(|assessment| assessment.claim_status.as_str()),
+            Some("asserted")
         );
         assert!(
             run_dir.join("state/input_fingerprint.json").exists(),

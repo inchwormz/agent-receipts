@@ -19,4 +19,5 @@ Thumbs.db
 # Project-local Receipts run dirs (created by driver.mjs / receipts init)
 .mythos/
 .gstack/
-.receipts/
+.receipts/*
+!.receipts/checks.toml

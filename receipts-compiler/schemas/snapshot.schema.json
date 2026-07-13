@@ -15,7 +15,7 @@
     "artifact_refs"
   ],
   "properties": {
-    "schema_version": { "type": "string", "enum": ["1.1.0", "1.2.0"] },
+    "schema_version": { "type": "string", "enum": ["1.1.0", "1.2.0", "2.0.0"] },
     "run_id": { "type": "string" },
     "pass_id": { "type": "string" },
     "branch_id": { "type": "string" },
