@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// One-shot helper: strip source_refs that point at <run-dir>/state/* from
-// ingested evidence and verifier records. Self-state references drift on every
-// recompile (because the compiler regenerates those files), so evidence that
-// cites them becomes hash-invalid immediately after the next pass.
+// One-shot helper: strip source_refs that point at self-mutating files inside
+// a run. These references become hash-invalid as soon as the next pass appends
+// a receipt, resolution, evidence record, finding, or regenerated state file.
 //
 // Usage: node scripts/scrub-self-state.mjs --run-dir <path>
 import fs from "node:fs";
@@ -16,12 +15,36 @@ function parseArgs(argv) {
   return { runDir: path.resolve(argv[runFlag + 1]) };
 }
 
-function isSelfState(refOrId) {
-  const str = String(refOrId ?? "").replace(/\\/g, "/");
-  return /\.codex\/(?:mythos|receipts)\/runs\/[^/]+\/state\//.test(str);
+const SELF_MUTATING_RUN_FILES = new Set([
+  "receipts/receipts.jsonl",
+  "decisions/resolutions.jsonl",
+  "worker-results/evidence.jsonl",
+  "verifier-results/findings.jsonl",
+]);
+
+function sourcePath(refOrId) {
+  let value = String(refOrId ?? "").replace(/\\/g, "/");
+  if (value.startsWith("file:")) value = value.slice("file:".length).replace(/:\d+(?:-\d+)?$/, "");
+  return value;
 }
 
-function scrubFile(file, fallbackSourceId) {
+function selfMutatingRunPath(refOrId, runDir) {
+  const value = sourcePath(refOrId);
+  if (!value) return null;
+  let relative;
+  if (path.isAbsolute(value)) {
+    relative = path.relative(runDir, path.resolve(value));
+    if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  } else {
+    relative = value;
+  }
+  const normalized = relative.replace(/\\/g, "/").replace(/^\.\//, "");
+  return normalized.startsWith("state/") || SELF_MUTATING_RUN_FILES.has(normalized)
+    ? normalized
+    : null;
+}
+
+function scrubFile(file, fallbackSourceId, runDir) {
   if (!fs.existsSync(file)) return { touched: 0, total: 0 };
   const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean);
   let touched = 0;
@@ -30,12 +53,12 @@ function scrubFile(file, fallbackSourceId) {
     let changed = false;
     if (Array.isArray(obj.source_refs)) {
       const before = obj.source_refs.length;
-      obj.source_refs = obj.source_refs.filter((r) => !isSelfState(r.path) && !isSelfState(r.source_id));
+      obj.source_refs = obj.source_refs.filter((r) => !selfMutatingRunPath(r.path, runDir) && !selfMutatingRunPath(r.source_id, runDir));
       if (obj.source_refs.length !== before) changed = true;
     }
     if (Array.isArray(obj.source_ids)) {
       const before = obj.source_ids.length;
-      obj.source_ids = obj.source_ids.filter((id) => !isSelfState(id));
+      obj.source_ids = obj.source_ids.filter((id) => !selfMutatingRunPath(id, runDir));
       if (obj.source_ids.length !== before) changed = true;
       if (obj.source_ids.length === 0 && fallbackSourceId) obj.source_ids = [fallbackSourceId];
     }
@@ -49,8 +72,8 @@ function scrubFile(file, fallbackSourceId) {
 function main() {
   const { runDir } = parseArgs(process.argv.slice(2));
   if (!fs.existsSync(runDir)) fail(`run dir does not exist: ${runDir}`);
-  const evResult = scrubFile(path.join(runDir, "worker-results/evidence.jsonl"), "raw:subagents/unknown.md");
-  const vfResult = scrubFile(path.join(runDir, "verifier-results/findings.jsonl"), "raw:subagents/unknown.md");
+  const evResult = scrubFile(path.join(runDir, "worker-results/evidence.jsonl"), "raw:subagents/unknown.md", runDir);
+  const vfResult = scrubFile(path.join(runDir, "verifier-results/findings.jsonl"), "raw:subagents/unknown.md", runDir);
   process.stdout.write(JSON.stringify({
     ok: true,
     evidence_touched: evResult.touched,

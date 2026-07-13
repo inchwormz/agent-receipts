@@ -8,9 +8,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveEngine } from "./bin/engine-identity.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const compilerDir = path.join(here, "receipts-compiler");
 
 function usage() {
   return [
@@ -316,39 +316,17 @@ function createRunDir(objective) {
 }
 
 function compileRunDir(runDir) {
-  // Prefer the installed `receipts-core` binary from PATH (installed via
-  // `cargo install receipts-skill`). Fall back to `cargo run` only when we're
-  // inside a source checkout that still has receipts-compiler/Cargo.toml —
-  // the npm-distributed package ships schemas + fixtures only, so cargo
-  // won't work there even if it's installed.
-  const compilerCargoToml = path.join(compilerDir, "Cargo.toml");
-  const sourceCheckout = fs.existsSync(compilerCargoToml);
-
-  let result;
-  if (sourceCheckout) {
-    result = spawnSync(
-      "cargo",
-      ["run", "--quiet", "--bin", "receipts-core", "--", "compile", "--run-dir", runDir],
-      {
-        cwd: compilerDir,
-        encoding: "utf8",
-        shell: process.platform === "win32",
-      },
-    );
-  } else {
-    result = spawnSync("receipts-core", ["compile", "--run-dir", runDir], {
-      encoding: "utf8",
-      shell: process.platform === "win32",
-    });
+  let engine;
+  try {
+    engine = resolveEngine({ rootPath: here });
+  } catch (error) {
+    fail(`receipts: engine identity handshake failed: ${error.message}`);
   }
+  const result = spawnSync(engine.binaryPath, ["compile", "--run-dir", runDir], {
+    encoding: "utf8",
+  });
 
   if (result.error) {
-    if (!sourceCheckout && result.error.code === "ENOENT") {
-      fail(
-        "receipts-core binary not found on PATH. Install it with `cargo install --path receipts-compiler` " +
-          "(or run from a source checkout that has receipts-compiler/Cargo.toml).",
-      );
-    }
     fail(`receipts-compiler spawn failed: ${result.error.message}`);
   }
   const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";

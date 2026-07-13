@@ -426,6 +426,75 @@ test("free-text citations become log: ids and the packet still compiles", (t) =>
   assert.equal(driver.status, 0, `packet must compile with log: citations: ${driver.stderr}`);
 });
 
+test("self-mutating run journals demote at ingest and legacy refs can be scrubbed", (t) => {
+  const runDir = freshRunDir("self-mutating-journals");
+  t.after(() => removeDir(runDir));
+
+  const journalPaths = [
+    "receipts/receipts.jsonl",
+    "decisions/resolutions.jsonl",
+    "worker-results/evidence.jsonl",
+    "verifier-results/findings.jsonl",
+  ];
+  for (const relativePath of journalPaths.slice(0, 2)) {
+    const file = path.join(runDir, relativePath);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "seed\n", "utf8");
+  }
+
+  const from = writeLane(
+    runDir,
+    "self-mutating-journals",
+    "The journal receipts/receipts.jsonl:1 agrees with decisions/resolutions.jsonl:1.\n",
+  );
+  const result = ingest(runDir, "self-mutating-journals", from);
+  assert.equal(result.status, 0, `self-mutating citation ingest must survive: ${result.stderr}\n${result.stdout}`);
+
+  const evidenceFile = path.join(runDir, "worker-results", "evidence.jsonl");
+  let evidence = readJsonl(evidenceFile);
+  const harvested = evidence.find((record) => record.rationale === "harvested-from-prose");
+  assert.ok(harvested, "journal claim must be harvested");
+  assert.ok(
+    !(harvested.source_refs ?? []).some((ref) =>
+      ref.kind === "file" && journalPaths.includes(String(ref.path).replace(/\\/g, "/")),
+    ),
+    `mutable journals must not become file refs: ${JSON.stringify(harvested.source_refs)}`,
+  );
+  assert.ok(
+    (harvested.provenance_warnings ?? []).some((warning) => warning.includes("self-mutating-run-citation")),
+    "journal demotion must remain visible",
+  );
+
+  const legacy = {
+    id: "ev-legacy-self-journal",
+    kind: "observation",
+    summary: "legacy ingest pinned mutable run journals",
+    source_ids: journalPaths.map((relativePath) => `file:${relativePath}:1`),
+    source_refs: journalPaths.map((relativePath) => ({
+      source_id: `file:${relativePath}:1`,
+      path: relativePath,
+      kind: "file",
+      hash: "0000000000000000",
+      hash_alg: "fnv1a-64",
+      span: "1",
+      observed_at: now(),
+    })),
+    observed_at: now(),
+  };
+  fs.appendFileSync(evidenceFile, `${JSON.stringify(legacy)}\n`, "utf8");
+
+  const scrub = runNode(["scripts/scrub-self-state.mjs", "--run-dir", runDir]);
+  assert.equal(scrub.status, 0, `self-state scrub must survive: ${scrub.stderr}\n${scrub.stdout}`);
+  evidence = readJsonl(evidenceFile);
+  const scrubbed = evidence.find((record) => record.id === legacy.id);
+  assert.ok(scrubbed, "legacy record must remain after scrub");
+  assert.equal(scrubbed.source_refs.length, 0, "all mutable journal refs must be removed");
+  assert.ok(
+    !scrubbed.source_ids.some((sourceId) => journalPaths.some((relativePath) => sourceId.includes(relativePath))),
+    `mutable journal ids must be removed: ${JSON.stringify(scrubbed.source_ids)}`,
+  );
+});
+
 test("agent-declared source_refs are discarded and resynthesized (the field test's biggest killer)", (t) => {
   const runDir = freshRunDir("refs-discarded");
   t.after(() => removeDir(runDir));
@@ -612,6 +681,10 @@ test("commit-hash anchors: real commits harvest as verified citations, fake ones
   assert.ok(fs.existsSync(persisted), "gate must persist state/gate-report.json unprompted");
   const gateReport = JSON.parse(fs.readFileSync(persisted, "utf8"));
   assert.equal(typeof gateReport.ok, "boolean", "persisted verdict must be the real report");
+  assert.ok(
+    !(gateReport.errors ?? []).some((error) => /source_ref commit:.*kind "commit" is not in the allowed set/.test(error)),
+    `verified commit citations must be admitted by the gate: ${JSON.stringify(gateReport.errors)}`,
+  );
 });
 
 test("flag-like objectives are rejected instead of scaffolding a run named --help", (t) => {

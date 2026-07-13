@@ -162,6 +162,33 @@ test("absorb happy path: fenced lane record lands in evidence, mints a work:tree
   assert.notEqual(afterContent, beforeContent, "packet content must reflect the newly absorbed lane");
 });
 
+test("absorb recompiles packets larger than Node's default spawnSync buffer", (t) => {
+  const runDir = freshRunDir("absorb-large-packet");
+  t.after(() => removeDir(runDir));
+
+  const evidencePath = path.join(runDir, "worker-results", "evidence.jsonl");
+  const padding = "x".repeat(2048);
+  const evidence = Array.from({ length: 900 }, (_, index) =>
+    JSON.stringify({
+      id: `ev-large-packet-${index}`,
+      kind: "observation",
+      summary: `large packet row ${index} ${padding}`,
+      source_ids: ["raw:objective.md"],
+      observed_at: now(),
+    }),
+  ).join("\n");
+  fs.appendFileSync(evidencePath, `${evidence}\n`, "utf8");
+
+  const laneFile = path.join(runDir, "raw", "lane-large-packet.md");
+  fs.writeFileSync(laneFile, "Large-packet absorb completed.\n", "utf8");
+
+  const result = absorb(runDir, "large-packet-lane", "large-packet-agent", laneFile, ["--no-diff"]);
+  const packetPath = path.join(runDir, "state", "next_pass_packet.json");
+  assert.ok(fs.existsSync(packetPath), `compiler must write the packet before absorb returns: ${result.stderr}`);
+  assert.ok(fs.statSync(packetPath).size > 1024 * 1024, "regression fixture must exceed Node's default spawnSync buffer");
+  assert.equal(result.status, 0, `absorb must not fail with ENOBUFS: ${result.stderr}`);
+});
+
 test("absorb propagates ingest failure (nonexistent --from file -> nonzero exit)", (t) => {
   const runDir = freshRunDir("absorb-ingest-fail");
   t.after(() => removeDir(runDir));

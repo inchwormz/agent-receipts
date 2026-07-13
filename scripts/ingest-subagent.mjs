@@ -893,6 +893,25 @@ function resolveSourcePath(sourcePath, runDir, repoRoot) {
   return null;
 }
 
+const SELF_MUTATING_RUN_FILES = new Set([
+  "receipts/receipts.jsonl",
+  "decisions/resolutions.jsonl",
+  "worker-results/evidence.jsonl",
+  "verifier-results/findings.jsonl",
+]);
+
+function selfMutatingRunPath(resolvedPath, runDir) {
+  if (!resolvedPath || !runDir) return null;
+  const relative = path.relative(path.resolve(runDir), path.resolve(resolvedPath));
+  if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return null;
+  }
+  const normalized = relative.replace(/\\/g, "/");
+  return normalized.startsWith("state/") || SELF_MUTATING_RUN_FILES.has(normalized)
+    ? normalized
+    : null;
+}
+
 // Citation rescue ladder (field tuning, 2026-07-13 NTM run: 24/95 records
 // were demoted on unverifiable-citation and most were REAL citations dying
 // on normalization - drive-stripped absolute paths, agent-cwd-relative
@@ -1123,6 +1142,7 @@ function normalizeSourceRefs(record, observedAt, runCreatedAt, runDir, repoRoot)
   record = normalizedRecord;
   const sourceRefs = [...declaredRefs, ...synthesizedRefs];
 
+  const sourceIdReplacements = new Map();
   const normalizedRefs = sourceRefs.map((source) => {
     const next = { ...source };
     if (!next.kind) {
@@ -1143,18 +1163,21 @@ function normalizeSourceRefs(record, observedAt, runCreatedAt, runDir, repoRoot)
     }
     if (next.kind === "file") {
       const resolved = resolveSourcePath(next.path, runDir, repoRoot);
-      // Block self-referential state/ files by MECHANISM (path identity
-      // against THIS run's state dir, not a layout-coupled regex): the
-      // compiler regenerates <run-dir>/state/* on every recompile, so hashing
-      // them at ingest guarantees a drift-mismatch on the next recurrence.
-      if (resolved && runDir) {
-        const stateDir = path.resolve(runDir, "state") + path.sep;
-        if ((path.resolve(resolved) + path.sep).startsWith(stateDir)) {
-          // H5: tell the agent what to cite instead, not just what not to.
-          throw new Error(
-            `source_ref ${next.source_id ?? "<unknown>"} points at compiler-generated state/ file (${next.path}); evidence must cite stable inputs — try the run's raw/ or worker-results/ files, or the original source code, not derived compiler outputs`,
-          );
-        }
+      const mutableRunPath = selfMutatingRunPath(resolved, runDir);
+      if (mutableRunPath) {
+        const originalId = next.source_id;
+        const demotedId = `log:self-mutating-run-${slugify(mutableRunPath)}`;
+        provenanceWarnings.push(
+          `self-mutating-run-citation: ${originalId ?? next.path} points at ${mutableRunPath}; cite a receipt id, raw report, or stable project source instead`,
+        );
+        next.source_id = demotedId;
+        next.path = mutableRunPath;
+        next.kind = "log";
+        next.span = null;
+        next.hash = fnv1aHash(Buffer.from(demotedId, "utf8"));
+        next.hash_basis = "label";
+        sourceIdReplacements.set(originalId, demotedId);
+        return next;
       }
       if (!resolved || !fs.existsSync(resolved)) {
         throw new Error(
@@ -1233,7 +1256,11 @@ function normalizeSourceRefs(record, observedAt, runCreatedAt, runDir, repoRoot)
     return next;
   });
 
-  const sourceIds = new Set(Array.isArray(record.source_ids) ? record.source_ids : []);
+  const sourceIds = new Set(
+    (Array.isArray(record.source_ids) ? record.source_ids : []).map((sourceId) =>
+      sourceIdReplacements.get(sourceId) ?? sourceId,
+    ),
+  );
   for (const source of normalizedRefs) {
     if (!source.source_id) throw new Error(`record ${record.id ?? "<unknown>"} has source_ref without source_id`);
     sourceIds.add(source.source_id);

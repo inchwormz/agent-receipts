@@ -122,6 +122,7 @@ function isDirectSourceId(sourceId) {
 
 const ALLOWED_SOURCE_KINDS = new Set([
   "file",
+  "commit",
   "raw",
   "command",
   "test",

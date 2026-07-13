@@ -1,10 +1,10 @@
-# receipts-skill
+# Agent Receipts engine
 
 Deterministic packet compiler for AI agent runs.
 
 Takes raw subagent output (evidence JSONL, verifier findings, raw artifacts) and compiles a schema-validated, hash-provenanced `next_pass_packet.json` that the orchestrating model reads instead of raw subagent prose.
 
-Part of the [receipts-skill](https://github.com/inchwormz/receipts-skill) project — see the repo for the full JS runtime (ingest, strict gate, readiness) that drives this crate.
+Part of the [agent-receipts](https://github.com/inchwormz/agent-receipts) project — see the repo for the full runtime that drives this crate.
 
 ## What this crate does
 
@@ -16,8 +16,10 @@ Part of the [receipts-skill](https://github.com/inchwormz/receipts-skill) projec
 
 ## Install
 
+Install the public package; it builds and verifies this bundled engine source:
+
 ```bash
-cargo install receipts-skill
+npm install -g github:inchwormz/agent-receipts
 ```
 
 ## Run

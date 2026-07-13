@@ -75,7 +75,7 @@ flowchart LR
     GATE -->|"exit 1"| RED["🚫 named refutations<br/>+ a worklist"]
 ```
 
-The engine is two small binaries: `receipts-core` (Rust, deterministic compiler and receipt journal) and `receipts` (Node CLI, the one command you use). No server, no accounts, no telemetry. Runs are plain directories you can read, diff, and commit.
+The runtime is a thin `receipts` Node dispatcher over the bundled `receipts-core` Rust engine. The dispatcher builds that exact source and verifies its protocol, build commit, dependency lock, platform, and binary digest before execution; ambient `PATH` binaries are ignored. No server, no accounts, no telemetry. Runs are plain directories you can read, diff, and commit.
 
 ## The trust ladder
 
@@ -174,8 +174,7 @@ Or by hand from a clone:
 ```bash
 git clone https://github.com/inchwormz/agent-receipts
 cd agent-receipts
-cargo install --path receipts-compiler   # the receipts-core engine
-npm install -g .                         # the `receipts` CLI
+npm install -g .                         # builds and verifies the bundled engine
 receipts ready                           # end-to-end self-check
 ```
 

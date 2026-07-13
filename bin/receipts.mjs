@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
+import { resolveEngine } from "./engine-identity.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.dirname(here);
@@ -44,17 +45,17 @@ function printHelp() {
       `    receipts absorb --run-dir my-run --lane L1 --agent-id a --from agent.md\n` +
       `    receipts conclude --run-dir my-run --synthesis "what happened this pass"\n` +
       `    receipts gate --run-dir my-run\n\n` +
-      `The Rust compiler binary \`receipts-core\` is required for compile. Install it with\n` +
-      `\`cargo install receipts\` if it is not on PATH.\n`
+      `The package builds and verifies its bundled Rust engine before execution.\n`
   );
 }
 
-function which(cmd) {
-  const probe = spawnSync(process.platform === "win32" ? "where" : "which", [cmd], {
-    stdio: "pipe",
-    encoding: "utf8",
-  });
-  return probe.status === 0 ? probe.stdout.split(/\r?\n/)[0].trim() : null;
+function verifiedCore() {
+  try {
+    return resolveEngine({ rootPath: root }).binaryPath;
+  } catch (error) {
+    process.stderr.write(`receipts: engine identity handshake failed: ${error.message}\n`);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,14 +88,15 @@ function hasFlag(argv, flag) {
 // directly — routing them through cmd.exe (shell: true) instead breaks the
 // moment either path contains a space (e.g. `C:\Program Files\nodejs\node.exe`),
 // since cmd.exe then splits the command at that space.
-function spawnScript(scriptRelPath, scriptArgs) {
+function spawnScript(scriptRelPath, scriptArgs, { captureStdout = true } = {}) {
   return spawnSync(process.execPath, [path.join(root, scriptRelPath), ...scriptArgs], {
     encoding: "utf8",
+    stdio: ["ignore", captureStdout ? "pipe" : "ignore", "pipe"],
   });
 }
 
-// Spawn the resolved `receipts-core` binary (a full path from which()/where). Same
-// no-shell reasoning as spawnScript.
+// Spawn the explicit, identity-verified `receipts-core` binary. Same no-shell
+// reasoning as spawnScript.
 function spawnCore(corePath, coreArgs) {
   return spawnSync(corePath, coreArgs, { encoding: "utf8" });
 }
@@ -146,13 +148,13 @@ function cmdAbsorb(args) {
     return 1;
   }
 
-  // Step 2: `receipts-core diff` unless --no-diff. NON-FATAL — repo_root may not be
-  // a git repo, or the binary may not be installed; warn and continue.
+  // Step 2: `receipts-core diff` unless --no-diff. A diff command can still be
+  // non-fatal for a non-Git repo, but engine identity itself always fails closed.
   let workReceipt = null;
   if (!noDiff) {
-    const core = which("receipts-core");
+    const core = verifiedCore();
     if (!core) {
-      process.stderr.write("receipts absorb: warning: `receipts-core` binary not found on PATH; skipping diff receipt\n");
+      return 1;
     } else {
       const diffResult = spawnCore(core, ["diff", "--run-dir", runDir, "--note", `post-lane ${lane}`]);
       if (diffResult.error) {
@@ -172,7 +174,7 @@ function cmdAbsorb(args) {
   }
 
   // Step 3: recompile. FATAL on failure.
-  const compileResult = spawnScript("driver.mjs", ["--run-dir", runDir]);
+  const compileResult = spawnScript("driver.mjs", ["--run-dir", runDir], { captureStdout: false });
   if (compileResult.error) {
     process.stderr.write(`receipts absorb: failed to run driver.mjs: ${compileResult.error.message}\n`);
     return 1;
@@ -208,7 +210,7 @@ function cmdConclude(args) {
   // stale here - record-synthesis fails closed on staleness by design.
   // (Field find, 2026-07-13: the first conclude of the first field run hit
   // exactly this; the spec missed it.) FATAL on failure.
-  const precompile = spawnScript("driver.mjs", ["--run-dir", runDir]);
+  const precompile = spawnScript("driver.mjs", ["--run-dir", runDir], { captureStdout: false });
   if (precompile.error || precompile.status !== 0) {
     if (precompile.stderr) process.stderr.write(precompile.stderr);
     process.stderr.write("receipts conclude: pre-synthesis recompile failed\n");
@@ -217,7 +219,9 @@ function cmdConclude(args) {
 
   // Step 1: record synthesis + recompile. FATAL on failure. Suppress its
   // stdout (the packet dump); let stderr through.
-  const synthesisResult = spawnScript("driver.mjs", ["--run-dir", runDir, "--record-synthesis", synthesis]);
+  const synthesisResult = spawnScript("driver.mjs", ["--run-dir", runDir, "--record-synthesis", synthesis], {
+    captureStdout: false,
+  });
   if (synthesisResult.error) {
     process.stderr.write(`receipts conclude: failed to run driver.mjs: ${synthesisResult.error.message}\n`);
     return 1;
@@ -240,9 +244,9 @@ function cmdConclude(args) {
 
   // Step 3: human-readable report, unless --skip-report. Non-fatal.
   if (!skipReport) {
-    const core = which("receipts-core");
+    const core = verifiedCore();
     if (!core) {
-      process.stderr.write("receipts conclude: warning: `receipts-core` binary not found on PATH; skipping report\n");
+      return 1;
     } else {
       const reportResult = spawnCore(core, ["report", "--run-dir", runDir]);
       if (reportResult.error) {
@@ -256,12 +260,9 @@ function cmdConclude(args) {
   }
 
   // Step 4: the compressed Prime brief — this is what Prime reads next.
-  const coreNext = which("receipts-core");
+  const coreNext = verifiedCore();
   if (!coreNext) {
-    process.stderr.write(
-      "receipts: the `receipts-core` binary is not on PATH.\nInstall it with: cargo install receipts\n",
-    );
-    return gateExitCode;
+    return 1;
   }
   const nextResult = spawnCore(coreNext, ["next", "--run-dir", runDir]);
   if (nextResult.error) {
@@ -302,13 +303,9 @@ function run(command, args) {
     case "diff":
     case "resolve":
     case "next": {
-      const core = which("receipts-core");
+      const core = verifiedCore();
       if (!core) {
-        process.stderr.write(
-          "receipts: the `receipts-core` binary is not on PATH.\n" +
-            "Install it with: cargo install receipts\n"
-        );
-        return 127;
+        return 1;
       }
       const r = spawnSync(core, [command, ...args], { stdio: "inherit" });
       return r.status ?? 1;

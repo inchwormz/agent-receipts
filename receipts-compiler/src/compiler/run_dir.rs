@@ -13,7 +13,7 @@ use crate::schema::{
     VerifierFinding, WorkerResult,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -48,13 +48,14 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
         .trim()
         .to_string();
     let raw_sources = load_sources(&run_dir.join("raw"), &manifest.created_at)?;
-    let worker_evidence =
+    let mut worker_evidence =
         read_jsonl::<EvidenceRecord>(&run_dir.join("worker-results/evidence.jsonl"))?;
-    let verifier_findings =
+    let mut verifier_findings =
         read_jsonl::<VerifierFinding>(&run_dir.join("verifier-results/findings.jsonl"))?;
 
     let repo_root = manifest.repo_root.as_deref();
     verify_declared_file_refs(run_dir, repo_root, &worker_evidence, &verifier_findings)?;
+    version_temporal_file_sources(&mut worker_evidence, &mut verifier_findings)?;
 
     // M1/M2: load the execution-receipt journal. A broken hash chain is a
     // hard compile error - receipts are the one artifact whose integrity is
@@ -68,7 +69,6 @@ pub fn compile_run_dir(run_dir: &Path) -> Result<RunDirCompileReport, Box<dyn st
             receipt.label.as_deref() == Some(crate::compiler::receipts::WORK_LABEL)
         });
     let exec_receipts: Vec<ReceiptRecord> = exec_receipts.into_iter().cloned().collect();
-    let mut worker_evidence = worker_evidence;
     worker_evidence.extend(exec_receipts.iter().map(receipt_evidence_record));
     worker_evidence.extend(
         work_receipts
@@ -424,6 +424,103 @@ fn verifier_declared_sources(findings: &[VerifierFinding]) -> Vec<SourceRef> {
         .iter()
         .flat_map(|finding| finding.source_refs.clone())
         .collect()
+}
+
+/// A repo file citation identifies bytes observed at a moment, not one
+/// immutable path for the lifetime of a run. When that path has multiple
+/// observed hashes, make the content pin part of the source id and update the
+/// owning record atomically. Other source kinds keep strict global identity.
+fn version_temporal_file_sources(
+    evidence: &mut [EvidenceRecord],
+    findings: &mut [VerifierFinding],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut variants: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    for record in evidence.iter() {
+        collect_record_file_variants("evidence", &record.id, &record.source_refs, &mut variants)?;
+    }
+    for finding in findings.iter() {
+        collect_record_file_variants(
+            "verifier_finding",
+            &finding.id,
+            &finding.source_refs,
+            &mut variants,
+        )?;
+    }
+
+    let temporal_ids: BTreeSet<String> = variants
+        .into_iter()
+        .filter_map(|(source_id, variants)| (variants.len() > 1).then_some(source_id))
+        .collect();
+    if temporal_ids.is_empty() {
+        return Ok(());
+    }
+
+    for record in evidence.iter_mut() {
+        version_record_file_sources(
+            &mut record.source_ids,
+            &mut record.source_refs,
+            &temporal_ids,
+        );
+    }
+    for finding in findings.iter_mut() {
+        version_record_file_sources(
+            &mut finding.source_ids,
+            &mut finding.source_refs,
+            &temporal_ids,
+        );
+    }
+    Ok(())
+}
+
+fn collect_record_file_variants(
+    label: &str,
+    record_id: &str,
+    refs: &[SourceRef],
+    variants: &mut BTreeMap<String, BTreeSet<(String, String)>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut local: HashMap<&str, (&str, &str)> = HashMap::new();
+    for source in refs
+        .iter()
+        .filter(|source| source.kind == "file" && source.source_id.starts_with("file:"))
+    {
+        let variant = (source.hash_alg.as_str(), source.hash.as_str());
+        if let Some(prior) = local.insert(source.source_id.as_str(), variant)
+            && prior != variant
+        {
+            return Err(format!(
+                "{label} `{record_id}` declares file source_id `{}` twice with divergent hash",
+                source.source_id
+            )
+            .into());
+        }
+        variants
+            .entry(source.source_id.clone())
+            .or_default()
+            .insert((source.hash_alg.clone(), source.hash.clone()));
+    }
+    Ok(())
+}
+
+fn version_record_file_sources(
+    source_ids: &mut [String],
+    source_refs: &mut [SourceRef],
+    temporal_ids: &BTreeSet<String>,
+) {
+    let mut replacements: HashMap<String, String> = HashMap::new();
+    for source in source_refs.iter_mut() {
+        if source.kind != "file" || !temporal_ids.contains(&source.source_id) {
+            continue;
+        }
+        let original = source.source_id.clone();
+        let versioned = format!("{original}@{}:{}", source.hash_alg, source.hash);
+        source.source_id = versioned.clone();
+        replacements.insert(original, versioned);
+    }
+    for source_id in source_ids.iter_mut() {
+        if let Some(versioned) = replacements.get(source_id) {
+            *source_id = versioned.clone();
+        }
+    }
 }
 
 /// Dedupe packet sources by `source_id`, and fail hard when two refs share an
@@ -1296,8 +1393,9 @@ fn fnv1a_hash(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::compile_run_dir;
-    use crate::schema::{NextPassPacket, RECEIPTS_HASH_ALG, RECEIPTS_SCHEMA_VERSION};
+    use super::{collect_record_file_variants, compile_run_dir, dedupe_sources_strict, fnv1a_hash};
+    use crate::schema::{NextPassPacket, RECEIPTS_HASH_ALG, RECEIPTS_SCHEMA_VERSION, SourceRef};
+    use std::collections::BTreeMap;
     use std::fs;
 
     #[test]
@@ -1443,5 +1541,214 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn compile_versions_temporal_file_refs_when_repo_content_drifted() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp = std::env::temp_dir().join(format!("receipts-temporal-file-run-{nonce}"));
+        let repo_root = std::env::temp_dir().join(format!("receipts-temporal-file-repo-{nonce}"));
+        let source_path = "agent-tools/map.ts";
+        let source_id = format!("file:{source_path}:1");
+        let old_content = b"export const authority = 'old';\n";
+        let current_content = b"export const authority = 'current';\n";
+        let old_hash = fnv1a_hash(old_content);
+        let current_hash = fnv1a_hash(current_content);
+
+        fs::create_dir_all(tmp.join("raw")).unwrap();
+        fs::create_dir_all(tmp.join("worker-results")).unwrap();
+        fs::create_dir_all(tmp.join("verifier-results")).unwrap();
+        fs::create_dir_all(repo_root.join("agent-tools")).unwrap();
+        fs::write(repo_root.join(source_path), current_content).unwrap();
+        fs::write(
+            tmp.join("manifest.json"),
+            serde_json::json!({
+                "objective_id": "obj-temporal-file",
+                "run_id": "run-temporal-file",
+                "branch_id": "main",
+                "pass_id": "pass-0001",
+                "created_at": "2026-07-13T06:00:00Z",
+                "repo_root": repo_root
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(tmp.join("task.md"), "Preserve temporal file evidence").unwrap();
+        fs::write(
+            tmp.join("raw/objective.md"),
+            "# Objective\nPreserve temporal file evidence\n",
+        )
+        .unwrap();
+
+        let evidence = [
+            serde_json::json!({
+                "id": "ev-before-edit",
+                "kind": "observation",
+                "summary": "observed the file before the edit",
+                "source_ids": [source_id.clone()],
+                "source_refs": [{
+                    "source_id": source_id.clone(),
+                    "path": source_path,
+                    "kind": "file",
+                    "hash": old_hash,
+                    "hash_alg": "fnv1a-64",
+                    "span": "1",
+                    "observed_at": "2026-07-13T06:01:00Z"
+                }],
+                "observed_at": "2026-07-13T06:01:00Z"
+            }),
+            serde_json::json!({
+                "id": "ev-after-edit",
+                "kind": "observation",
+                "summary": "observed the file after the edit",
+                "source_ids": [source_id.clone()],
+                "source_refs": [{
+                    "source_id": source_id.clone(),
+                    "path": source_path,
+                    "kind": "file",
+                    "hash": current_hash,
+                    "hash_alg": "fnv1a-64",
+                    "span": "1",
+                    "observed_at": "2026-07-13T06:02:00Z"
+                }],
+                "observed_at": "2026-07-13T06:02:00Z"
+            }),
+        ];
+        fs::write(
+            tmp.join("worker-results/evidence.jsonl"),
+            format!("{}\n{}\n", evidence[0], evidence[1]),
+        )
+        .unwrap();
+        let finding = serde_json::json!({
+            "id": "vf-after-edit",
+            "summary": "verified the current file",
+            "status": "failed",
+            "verifier_score": 0.0,
+            "source_ids": [source_id.clone()],
+            "source_refs": [{
+                "source_id": source_id.clone(),
+                "path": source_path,
+                "kind": "file",
+                "hash": current_hash,
+                "hash_alg": "fnv1a-64",
+                "span": "1",
+                "observed_at": "2026-07-13T06:03:00Z"
+            }]
+        });
+        fs::write(
+            tmp.join("verifier-results/findings.jsonl"),
+            format!("{finding}\n"),
+        )
+        .unwrap();
+
+        let report = compile_run_dir(&tmp).expect("temporal file refs must compile");
+        let packet: NextPassPacket =
+            serde_json::from_slice(&fs::read(report.packet_path).expect("read compiled packet"))
+                .expect("packet schema");
+        let expected_ids = [
+            format!("{source_id}@fnv1a-64:{old_hash}"),
+            format!("{source_id}@fnv1a-64:{current_hash}"),
+        ];
+
+        for expected_id in &expected_ids {
+            assert!(
+                packet
+                    .sources
+                    .iter()
+                    .any(|source| source.source_id == *expected_id),
+                "missing versioned source {expected_id}"
+            );
+        }
+        for record in packet
+            .evidence
+            .iter()
+            .filter(|record| record.id == "ev-before-edit" || record.id == "ev-after-edit")
+        {
+            assert_eq!(
+                record.source_ids,
+                vec![record.source_refs[0].source_id.clone()]
+            );
+            assert!(expected_ids.contains(&record.source_ids[0]));
+        }
+        let finding = packet
+            .verifier_findings
+            .iter()
+            .find(|finding| finding.id == "vf-after-edit")
+            .expect("compiled verifier finding");
+        assert_eq!(
+            finding.source_ids,
+            vec![finding.source_refs[0].source_id.clone()]
+        );
+        assert_eq!(finding.source_ids[0], expected_ids[1]);
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_dir_all(&repo_root);
+    }
+
+    #[test]
+    fn temporal_file_versioning_rejects_same_record_hash_disagreement() {
+        let source_id = "file:src/lib.rs:7";
+        let refs = [
+            SourceRef {
+                source_id: source_id.to_string(),
+                path: "src/lib.rs".to_string(),
+                kind: "file".to_string(),
+                hash: "1111111111111111".to_string(),
+                hash_alg: RECEIPTS_HASH_ALG.to_string(),
+                hash_basis: Some("content".to_string()),
+                span: Some("7".to_string()),
+                observed_at: "2026-07-13T06:01:00Z".to_string(),
+            },
+            SourceRef {
+                source_id: source_id.to_string(),
+                path: "src/lib.rs".to_string(),
+                kind: "file".to_string(),
+                hash: "2222222222222222".to_string(),
+                hash_alg: RECEIPTS_HASH_ALG.to_string(),
+                hash_basis: Some("content".to_string()),
+                span: Some("7".to_string()),
+                observed_at: "2026-07-13T06:01:00Z".to_string(),
+            },
+        ];
+        let mut variants = BTreeMap::new();
+
+        let err = collect_record_file_variants("evidence", "ev-bad", &refs, &mut variants)
+            .expect_err("same record disagreement must fail");
+
+        assert!(format!("{err}").contains("declares file source_id"));
+    }
+
+    #[test]
+    fn strict_dedupe_still_rejects_divergent_non_file_sources() {
+        let mut sources = vec![
+            SourceRef {
+                source_id: "command:test:focused".to_string(),
+                path: "receipts/one.json".to_string(),
+                kind: "command".to_string(),
+                hash: "1111111111111111".to_string(),
+                hash_alg: RECEIPTS_HASH_ALG.to_string(),
+                hash_basis: Some("content".to_string()),
+                span: None,
+                observed_at: "2026-07-13T06:01:00Z".to_string(),
+            },
+            SourceRef {
+                source_id: "command:test:focused".to_string(),
+                path: "receipts/two.json".to_string(),
+                kind: "command".to_string(),
+                hash: "2222222222222222".to_string(),
+                hash_alg: RECEIPTS_HASH_ALG.to_string(),
+                hash_basis: Some("content".to_string()),
+                span: None,
+                observed_at: "2026-07-13T06:02:00Z".to_string(),
+            },
+        ];
+
+        let err = dedupe_sources_strict(&mut sources)
+            .expect_err("non-file source identities remain immutable");
+
+        assert!(format!("{err}").contains("declared twice with divergent hash"));
     }
 }

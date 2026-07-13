@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const compilerDir = path.join(root, "receipts-compiler");
+const readinessCargoTarget = path.join(root, ".receipts", "readiness-cargo", `${process.platform}-${process.arch}`);
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -493,18 +494,15 @@ function main() {
   checkAgentPolicy();
   checkStrictGate();
 
-  // Only run cargo fmt/test when we're inside a source checkout. The
-  // npm-distributed package ships schemas + fixtures only (no src/ or
-  // Cargo.toml), so a cargo invocation would ENOENT.
+  // The npm package includes the engine source. Pin Cargo to this repository's
+  // ignored target so a same-named crate from another checkout cannot supply a
+  // stale false green through a machine-wide CARGO_TARGET_DIR.
   const cargoTomlPath = path.join(compilerDir, "Cargo.toml");
-  if (fs.existsSync(cargoTomlPath)) {
-    run("cargo", ["fmt", "--manifest-path", cargoTomlPath, "--check"]);
-    run("cargo", ["test", "--manifest-path", cargoTomlPath]);
-  } else {
-    process.stdout.write(
-      "readiness: skipping cargo fmt/test (source checkout not present; relying on the installed `receipts-core` binary).\n",
-    );
-  }
+  assert(fs.existsSync(cargoTomlPath), `bundled engine source is missing: ${cargoTomlPath}`);
+  run("cargo", ["fmt", "--manifest-path", cargoTomlPath, "--check"]);
+  run("cargo", ["test", "--locked", "--manifest-path", cargoTomlPath], {
+    env: { CARGO_TARGET_DIR: readinessCargoTarget },
+  });
 
   const fixtureState = path.join(compilerDir, "tests", "fixtures", "run-basic", "state");
   safeRemove(fixtureState);

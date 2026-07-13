@@ -71,6 +71,6 @@ Claude is Prime. The local runtime (Rust `receipts-core` + the Node `receipts` C
 
 ## Troubleshooting
 
-- `receipts-core` missing on PATH → `cargo install --path receipts-compiler` from the repo checkout, then copy the exe to a PATH dir if needed. Stale installed binaries are a named trap: reinstall after engine changes.
+- Engine identity failure → reinstall from `github:inchwormz/agent-receipts`; the package rebuilds its bundled Rust source and verifies protocol, commit, lockfile, platform, and digest before execution.
 - Legacy runs live under `.mythos/` (the old product name) — still readable with explicit `--run-dir`; new runs go under `.receipts/`. Legacy ```mythos-evidence-jsonl fences are accepted forever.
 - Gate red you believe is wrong → suspect the instrument first: is the packet fresh (`receipts compile`)? Is the binary current? The gate's errors name exact record ids — drill down before overriding.

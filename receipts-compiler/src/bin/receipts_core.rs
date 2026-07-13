@@ -8,6 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const ENGINE_PROTOCOL_VERSION: &str = "1";
+const BUILD_COMMIT: &str = env!("RECEIPTS_BUILD_COMMIT");
+const DEPENDENCY_LOCK_DIGEST: &str = env!("RECEIPTS_LOCK_DIGEST");
 
 fn main() {
     if let Err(error) = run() {
@@ -33,6 +36,20 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         "--version" | "-V" | "version" => {
             println!("receipts-core {VERSION}");
+            Ok(())
+        }
+        "identity" => {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "protocol_version": ENGINE_PROTOCOL_VERSION,
+                    "engine_version": VERSION,
+                    "build_commit": BUILD_COMMIT,
+                    "dependency_lock_digest": DEPENDENCY_LOCK_DIGEST,
+                    "os": std::env::consts::OS,
+                    "arch": std::env::consts::ARCH,
+                })
+            );
             Ok(())
         }
         "init" => {
@@ -100,6 +117,7 @@ USAGE:
     receipts-core <COMMAND> [ARGS]
 
 COMMANDS:
+    identity                        Print the machine-readable engine identity
     init <dir> [--repo-root <path>]   Scaffold a run directory (repo_root defaults to cwd)
     run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] -- <command...>
     run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] --exe <program> [--arg <token>]...

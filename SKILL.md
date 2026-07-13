@@ -14,30 +14,27 @@ Install the one that matches your Prime surface:
 
 ```bash
 # Claude Code
-curl -fsSL https://raw.githubusercontent.com/inchwormz/mythos-skill/main/skills/claude/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/inchwormz/agent-receipts/main/skills/claude/install.sh | sh
 
 # Codex
-curl -fsSL https://raw.githubusercontent.com/inchwormz/mythos-skill/main/skills/codex/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/inchwormz/agent-receipts/main/skills/codex/install.sh | sh
 ```
 
 PowerShell:
 
 ```powershell
 # Claude Code
-iwr https://raw.githubusercontent.com/inchwormz/mythos-skill/main/skills/claude/install.ps1 | iex
+iwr https://raw.githubusercontent.com/inchwormz/agent-receipts/main/skills/claude/install.ps1 | iex
 
 # Codex
-iwr https://raw.githubusercontent.com/inchwormz/mythos-skill/main/skills/codex/install.ps1 | iex
+iwr https://raw.githubusercontent.com/inchwormz/agent-receipts/main/skills/codex/install.ps1 | iex
 ```
 
-Either skill needs the Receipts runtime on PATH (from a repo checkout until the crates.io/npm publishes land):
+Either skill needs the Receipts runtime from the canonical public repository:
 
 ```bash
-cargo install --path receipts-compiler   # installs the receipts-core engine
-npm install -g github:inchwormz/mythos-skill   # installs the `receipts` CLI
+npm install -g github:inchwormz/agent-receipts
 receipts ready
 ```
-
-(Repository URLs still say `mythos-skill` — the GitHub rename to Receipts is pending; these URLs will keep working via GitHub redirects after it.)
 
 See [README.md](./README.md) for the full mental model and runtime architecture.
