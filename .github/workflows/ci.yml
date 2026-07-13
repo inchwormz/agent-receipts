@@ -42,6 +42,12 @@ jobs:
       - name: cargo test
         run: cargo test --manifest-path receipts-compiler/Cargo.toml
 
+      - name: put receipts-core on PATH for the CLI composites
+        shell: bash
+        run: |
+          cargo build --quiet --manifest-path receipts-compiler/Cargo.toml
+          echo "$PWD/receipts-compiler/target/debug" >> "$GITHUB_PATH"
+
       - name: node --test
         run: node --test tests/packet_shape_integrity.test.js tests/m0_trust_semantics.test.js tests/forgiving_ingest.test.js tests/receipts_attestation.test.js tests/worklist_resolutions.test.js tests/prime_brief.test.js tests/loop_composites.test.js
 
