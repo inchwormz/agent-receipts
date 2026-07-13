@@ -276,6 +276,10 @@ function cmdConclude(args) {
 }
 
 function run(command, args) {
+  if (command === "compile" && args.length === 1 && ["--help", "-h", "help"].includes(args[0])) {
+    printHelp();
+    return 0;
+  }
   switch (command) {
     case "help":
     case "--help":

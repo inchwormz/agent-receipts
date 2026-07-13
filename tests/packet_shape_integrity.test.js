@@ -681,6 +681,74 @@ test("ingest: BLOCKED sentinel alone emits a blocker evidence record and exits 0
   );
 });
 
+test("ingest: fenced scoreboard BLOCKED line does not emit a blocker", (t) => {
+  const runDir = freshRunDir("fenced-scoreboard-blocked");
+  t.after(() => removeDir(runDir));
+  const subagentPath = path.join(runDir, "raw", "subagents", "scoreboard.md");
+  fs.writeFileSync(
+    subagentPath,
+    [
+      "# Successful finalizer",
+      "",
+      "```text",
+      "PASS 242 -> 252",
+      "REVISE 192 -> 182",
+      "BLOCKED 1377 -> 1377",
+      "```",
+      "",
+      "```receipts-evidence-jsonl",
+      JSON.stringify({
+        id: "ev-finalizer-complete",
+        kind: "observation",
+        summary: "finalizer completed successfully",
+        source_ids: ["raw:objective.md"],
+        observed_at: "2026-07-13T00:00:00.000Z",
+      }),
+      "```",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const ingest = runNode([
+    "scripts/ingest-subagent.mjs", "--run-dir", runDir, "--lane", "scoreboard-lane",
+    "--agent-id", "scoreboard-agent", "--from", subagentPath,
+  ]);
+  assert.equal(ingest.status, 0, `stdout=${ingest.stdout}\nstderr=${ingest.stderr}`);
+  const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  assert.ok(evidence.some((record) => record.id === "ev-finalizer-complete"));
+  assert.equal(evidence.some((record) => record.kind === "blocker"), false);
+});
+
+test("ingest: unfenced numeric BLOCKED transition is scoreboard data, not a halt", (t) => {
+  const runDir = freshRunDir("numeric-scoreboard-blocked");
+  t.after(() => removeDir(runDir));
+  const subagentPath = path.join(runDir, "raw", "subagents", "numeric-scoreboard.md");
+  fs.writeFileSync(
+    subagentPath,
+    [
+      "BLOCKED 10 -> 9",
+      "",
+      "```receipts-evidence-jsonl",
+      JSON.stringify({
+        id: "ev-board-counted",
+        kind: "observation",
+        summary: "board counts were measured",
+        source_ids: ["raw:objective.md"],
+        observed_at: "2026-07-13T00:00:00.000Z",
+      }),
+      "```",
+    ].join("\n"),
+    "utf8",
+  );
+  const ingest = runNode([
+    "scripts/ingest-subagent.mjs", "--run-dir", runDir, "--lane", "numeric-lane",
+    "--agent-id", "numeric-agent", "--from", subagentPath,
+  ]);
+  assert.equal(ingest.status, 0, `stdout=${ingest.stdout}\nstderr=${ingest.stderr}`);
+  const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  assert.equal(evidence.some((record) => record.kind === "blocker"), false);
+});
+
 // Synthetic-packet helpers for the contradiction tests (G4/G5/G7). We bypass
 // the driver and write evidence.jsonl directly so we can control both sides
 // of the proposed pair, then run the Rust compiler via `driver.mjs` to

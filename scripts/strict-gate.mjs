@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -367,8 +368,26 @@ function hasDirectSource(record) {
   return (record.source_ids ?? []).some((id) => {
     if (typeof id !== "string") return false;
     if (id.startsWith("receipt:")) return RECEIPTS.ids.has(id.slice("receipt:".length));
+    // A commit citation is content-addressed by git itself; the gate
+    // re-verifies existence rather than trusting ingest's stamp.
+    if (id.startsWith("commit:")) return commitExistsInRepo(id.slice("commit:".length));
     return RECEIPTS.passingLabels.has(id);
   });
+}
+
+const COMMIT_CACHE = new Map();
+function commitExistsInRepo(sha) {
+  if (!REPO_ROOT || !/^[0-9a-f]{7,40}$/.test(sha)) return false;
+  if (COMMIT_CACHE.has(sha)) return COMMIT_CACHE.get(sha);
+  let ok = false;
+  try {
+    execFileSync("git", ["-C", REPO_ROOT, "cat-file", "-e", `${sha}^{commit}`], { stdio: "ignore" });
+    ok = true;
+  } catch {
+    ok = false;
+  }
+  COMMIT_CACHE.set(sha, ok);
+  return ok;
 }
 
 function packetSourceIds(packet) {
@@ -878,6 +897,20 @@ function main() {
   };
 
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+
+  // The verdict is not durable if it only lives on a terminal. Field
+  // finding (2026-07-13 NTM runs): orchestrators run the gate bare, read
+  // "ok": true, and state/gate-report.json never exists - so `next` and
+  // `report` can't show the verdict and the claim itself is unverifiable
+  // later. The gate now persists its own report, always.
+  try {
+    const stateDir = path.join(runDir, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "gate-report.json"), `${JSON.stringify(report, null, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`strict-gate: warning: could not persist state/gate-report.json: ${error.message}\n`);
+  }
+
   if (errors.length > 0) process.exit(1);
 }
 

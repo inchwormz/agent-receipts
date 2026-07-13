@@ -23,6 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
@@ -423,6 +424,7 @@ function parseRecordsFromBlock(block) {
 
 const ALLOWED_SOURCE_KINDS = new Set([
   "file",
+  "commit",
   "raw",
   "command",
   "test",
@@ -506,7 +508,7 @@ const SUMMARY_ALIASES = ["summary", "text", "note", "claim", "description", "fin
 const SOURCE_ALIASES = ["source_ids", "sources", "source", "source_id", "citations", "citation", "refs", "files", "file", "evidence_refs"];
 const OBSERVED_ALIASES = ["observed_at", "observedAt", "timestamp", "time", "when", "date"];
 const KIND_ALIASES = ["kind", "type", "category"];
-const KNOWN_ID_PREFIXES = /^(file|command|test|log|raw|packet|verifier|evidence|objective|receipt):/;
+const KNOWN_ID_PREFIXES = /^(file|command|test|log|raw|packet|verifier|evidence|objective|receipt|commit):/;
 
 // M1 trust boundary: only `receipts run` mints receipts. Agent-authored records
 // claiming to BE receipts are downgraded to observations; agent citations of
@@ -650,15 +652,53 @@ function normalizeRecordShape(record, { blockType, laneSlug, index, observedAt, 
 
   // Downgrade file: citations that cannot resolve on disk BEFORE strict
   // processing would hard-fail the whole lane on them. The claim survives,
-  // visibly unverifiable, and can never promote to a fact.
+  // visibly unverifiable, and can never promote to a fact. Before demoting,
+  // climb the rescue ladder - a real citation in the agent's own coordinate
+  // system (absolute path, cwd-relative) is a format problem, not a lie.
   next.source_ids = next.source_ids.map((id) => {
     const parsed = /^file:(.+?)(?::(\d+(?:-\d+)?))?$/.exec(id);
     if (!parsed) return id;
     const p = parsed[1];
+    const line = parsed[2];
     const resolved = resolveSourcePath(p, runDir, repoRoot);
     if (resolved && fs.existsSync(resolved)) return id;
+    const rescue = rescueCitationPath(p, repoRoot);
+    if (rescue) {
+      const rescuedId = `file:${rescue.rel}${line ? `:${line}` : ""}`;
+      repairs.push(`citation-rescue: ${id} -> ${rescuedId} (${rescue.how})`);
+      return rescuedId;
+    }
     const downgraded = `log:unverifiable-${slugifyCitation(p)}`;
     warnings.push(`unverifiable-citation: ${id} (path not found under run dir or repo_root) -> ${downgraded}`);
+    return downgraded;
+  });
+
+  // Agent-declared raw: citations must exist in THIS run dir. Citing
+  // another lane's quarantined file is legitimate cross-reference when it
+  // resolves; when it doesn't, downgrade like any unverifiable citation -
+  // the field replay proved a missing raw: path otherwise hard-crashes the
+  // compile ("references unknown artifact").
+  next.source_ids = next.source_ids.map((id) => {
+    const parsed = /^raw:(.+?)(?::(\d+(?:-\d+)?))?$/.exec(id);
+    if (!parsed) return id;
+    const rawPath = parsed[1];
+    if (runDir && fs.existsSync(path.resolve(runDir, "raw", rawPath))) return id;
+    if (runDir && fs.existsSync(path.resolve(runDir, rawPath))) return id;
+    const downgraded = `log:unverifiable-${slugifyCitation(rawPath)}`;
+    warnings.push(`unverifiable-citation: ${id} (no such quarantined file in this run) -> ${downgraded}`);
+    return downgraded;
+  });
+
+  // Commit citations: verify the hash actually exists in repo_root's git
+  // history. A real commit is the strongest citation an agent can offer
+  // (content-addressed by construction); a made-up one demotes like any
+  // other unverifiable claim.
+  next.source_ids = next.source_ids.map((id) => {
+    if (!id.startsWith("commit:")) return id;
+    const sha = id.slice("commit:".length);
+    if (commitExists(sha, repoRoot)) return id;
+    const downgraded = `log:unverifiable-commit-${sha.slice(0, 12)}`;
+    warnings.push(`unverifiable-citation: ${id} (commit not found in repo_root history) -> ${downgraded}`);
     return downgraded;
   });
 
@@ -743,6 +783,11 @@ function normalizeRecordShape(record, { blockType, laneSlug, index, observedAt, 
 // intent and keeps ordinary prose mentions of e.g. package.json from
 // harvesting as claims.
 const PATHISH_CITATION = /(?:[A-Za-z0-9_.-]+[\/\\])+[A-Za-z0-9_.-]+\.[A-Za-z0-9]{1,6}(?::\d+(?:-\d+)?)?|[A-Za-z0-9_-]+\.[A-Za-z0-9]{1,6}:\d+(?:-\d+)?/g;
+// Commit hashes in backticks - `b2ce6f45` / full 40-hex. Field finding
+// (2026-07-13): rich paragraph reports anchor to commits, not file:line;
+// a commit is MECHANICALLY verifiable against git, the best kind of
+// citation this product can ask for.
+const COMMITISH_CITATION = /`([0-9a-f]{7,40})`/g;
 const HARVEST_CAP = 40;
 
 function harvestProseClaims(text) {
@@ -757,6 +802,12 @@ function harvestProseClaims(text) {
     }
     if (inFence || !line || line.startsWith("#")) continue;
     const citations = [...new Set([...line.matchAll(PATHISH_CITATION)].map((m) => m[0]))];
+    for (const m of line.matchAll(COMMITISH_CITATION)) {
+      const sha = m[1];
+      // 7-hex minimum, but pure-decimal or dictionary-word lookalikes
+      // (e.g. `deadbeef` is fine, `1234567` is a number) need a letter.
+      if (/[a-f]/.test(sha) && /\d/.test(sha)) citations.push(`commit:${sha}`);
+    }
     if (citations.length === 0) continue;
     const summary = line
       .replace(/^[-*>|]+\s*/, "")
@@ -781,10 +832,34 @@ function harvestProseClaims(text) {
 // Scan for a `BLOCKED <reason>` sentinel. Match is anchored to line starts
 // and tolerates leading/trailing whitespace, so subagents can put it on the
 // last line of an otherwise-prose response or inline in a report section.
+//
+// Field tuning (2026-07-13 NTM run, three false positives -> three manual
+// resolutions): corpus scoreboards leak lines like `BLOCKED 1377 -> 1377`
+// and `BLOCKED=1377`, including inside blockquoted fences the old scan
+// didn't treat as fenced. A halt REASON is prose: it must contain letters
+// and must not read as a counter transition.
 function findBlockedSentinel(text) {
-  const match = text.match(/^[ \t]*BLOCKED[ \t]+(.+?)[ \t]*$/m);
+  let inFence = false;
+  const unfencedText = text
+    .split(/\r?\n/)
+    .map((line) => {
+      // `> ```" blockquoted fences toggle too - quoted reports were the
+      // false-positive channel.
+      if (/^[ \t>]*(```|~~~)/.test(line)) {
+        inFence = !inFence;
+        return "";
+      }
+      return inFence ? "" : line;
+    })
+    .join("\n");
+  const match = unfencedText.match(/^[ \t]*BLOCKED(?::|[ \t]+)[ \t]*(.+?)[ \t]*$/m);
   if (!match) return null;
   const reason = match[1].trim();
+  if (/^\d+\s*->\s*\d+$/.test(reason)) return null;
+  // Scoreboard transitions with units/suffixes: "3/44 -> 2/44 (json)".
+  if (/^[\d\s\/.,%:=+-]*->/.test(reason)) return null;
+  // A reason with no letters is a counter, not a halt.
+  if (!/[a-zA-Z]/.test(reason)) return null;
   return reason.length > 0 ? reason : null;
 }
 
@@ -818,8 +893,72 @@ function resolveSourcePath(sourcePath, runDir, repoRoot) {
   return null;
 }
 
+// Citation rescue ladder (field tuning, 2026-07-13 NTM run: 24/95 records
+// were demoted on unverifiable-citation and most were REAL citations dying
+// on normalization - drive-stripped absolute paths, agent-cwd-relative
+// paths). Rescue is a REPAIR (free, logged), never a trust upgrade: the
+// rescued path must exist under repo_root, so nothing unverifiable gets in.
+let trackedFilesCache = null;
+function trackedFiles(repoRoot) {
+  if (trackedFilesCache) return trackedFilesCache;
+  try {
+    const out = execFileSync("git", ["-C", repoRoot, "ls-files"], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    trackedFilesCache = out.split(/\r?\n/).filter(Boolean);
+  } catch {
+    trackedFilesCache = [];
+  }
+  return trackedFilesCache;
+}
+
+const commitCache = new Map();
+function commitExists(sha, repoRoot) {
+  if (!repoRoot || !/^[0-9a-f]{7,40}$/.test(sha)) return false;
+  if (commitCache.has(sha)) return commitCache.get(sha);
+  let ok = false;
+  try {
+    execFileSync("git", ["-C", repoRoot, "cat-file", "-e", `${sha}^{commit}`], {
+      stdio: "ignore",
+    });
+    ok = true;
+  } catch {
+    ok = false;
+  }
+  commitCache.set(sha, ok);
+  return ok;
+}
+
+function rescueCitationPath(sourcePath, repoRoot) {
+  if (!repoRoot || !sourcePath) return null;
+  const parts = sourcePath.split(/[\\/]+/).filter((s) => s && s !== "." && s !== "..");
+  // Rung 1: strip leading segments - "Users/johnr/repo/src/x.ts" and other
+  // absolute-ish prefixes reduce to a repo-relative path that exists.
+  for (let i = 1; i < Math.min(parts.length, 7); i++) {
+    const candidate = parts.slice(i).join("/");
+    if (candidate && fs.existsSync(path.resolve(repoRoot, candidate))) {
+      return { rel: candidate, how: "stripped non-repo path prefix" };
+    }
+  }
+  // Rung 2: unique tracked-basename match. Only for real filenames, and
+  // only when the repo has exactly ONE tracked file by that name -
+  // ambiguity stays demoted rather than guessed.
+  const base = parts[parts.length - 1];
+  if (base && base.includes(".") && base.length > 3) {
+    const hits = trackedFiles(repoRoot).filter((f) => f.split("/").pop() === base);
+    if (hits.length === 1) {
+      return { rel: hits[0], how: "unique tracked-basename match" };
+    }
+  }
+  return null;
+}
+
 function isDirectSourceId(sourceId) {
-  return typeof sourceId === "string" && /^(file|command|test|log):/.test(sourceId);
+  return (
+    typeof sourceId === "string" &&
+    (/^(file|command|test|log):/.test(sourceId) || COMMIT_ID_SHAPE.test(sourceId))
+  );
 }
 
 // G1+G10: normalize a `file:<path>:<span>` source_id. When the path portion is
@@ -893,6 +1032,7 @@ function normalizeFilePath(rawPath, repoRoot) {
 // still hash from disk when the path resolves under the run dir — that branch
 // is handled in normalizeSourceRefs itself.
 const AUTO_HASH_KINDS = new Set(["command", "test", "log", "raw", "packet", "verifier", "evidence", "objective"]);
+const COMMIT_ID_SHAPE = /^commit:([0-9a-f]{7,40})$/;
 
 // H3 helper: parse a direct source_id of the form `file:<path>:<line>` /
 // `command:<name>` / `test:<name>` / `log:<name>` into the fields a synthesized
@@ -906,6 +1046,10 @@ function parseDirectSourceId(sourceId) {
   const prefixMatch = /^(command|test|log):(.+)$/.exec(sourceId);
   if (prefixMatch) {
     return { kind: prefixMatch[1], path: prefixMatch[2], span: null };
+  }
+  const commitMatch = COMMIT_ID_SHAPE.exec(sourceId);
+  if (commitMatch) {
+    return { kind: "commit", path: commitMatch[1], span: null };
   }
   return null;
 }
@@ -1067,6 +1211,15 @@ function normalizeSourceRefs(record, observedAt, runCreatedAt, runDir, repoRoot)
         next.hash = fnv1aHash(Buffer.from(String(next.source_id ?? ""), "utf8"));
         next.hash_basis = "label";
       }
+    } else if (next.kind === "commit") {
+      // Commit refs: git's object store IS the content address - existence
+      // was verified at ingest (commitExists) and the gate re-verifies. The
+      // fnv1a digest here is an identity key over the id string; trust
+      // flows from git, stamped hash_basis:"git".
+      if (!/^[0-9a-f]{16}$/.test(String(next.hash ?? ""))) {
+        next.hash = fnv1aHash(Buffer.from(String(next.source_id ?? ""), "utf8"));
+      }
+      next.hash_basis = "git";
     } else if (AUTO_HASH_KINDS.has(next.kind)) {
       // H1 + F2 truth-in-labeling: command/test/log/etc. have no on-disk
       // artifact yet (receipts land in M2), so the digest is derived from the
@@ -1298,6 +1451,7 @@ function main() {
       try {
         evidence.push(processOne(shaped.record, "evidence", raw.lines));
         harvested += 1;
+        repairNotes.push(...shaped.repairs.map((note) => `${shaped.record.id}: ${note}`));
       } catch {
         // a single unharvestable line is not worth a report entry
       }

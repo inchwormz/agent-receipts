@@ -148,6 +148,10 @@ function parseArgs(argv) {
   if (argv.length === 0) {
     fail(usage(), 2);
   }
+  if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0])) {
+    process.stdout.write(`${usage()}\n`);
+    process.exit(0);
+  }
 
   const runDirFlag = argv.indexOf("--run-dir");
   const recordSynthesisFlag = argv.indexOf("--record-synthesis");
@@ -175,6 +179,11 @@ function parseArgs(argv) {
 
   const objective = argv.join(" ").trim();
   if (!objective) fail(usage(), 2);
+  // Flag-like objectives are always a mistake - the field produced a run
+  // directory literally named "help" from a stray `--help` (2026-07-13).
+  if (objective.startsWith("-")) {
+    fail(`unrecognized flag \`${argv[0]}\` - not creating a run named after it\n\n${usage()}`, 2);
+  }
   return { mode: "new-objective", objective };
 }
 

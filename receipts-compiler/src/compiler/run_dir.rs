@@ -1126,6 +1126,21 @@ fn derive_worklist(
         .iter()
         .filter(|record| record.kind == "unstructured")
     {
+        // Field tuning (2026-07-13 NTM run): a lane that ALSO delivered
+        // structured or harvested records just has a prose remainder -
+        // advising Prime to "re-task" it is noise. The advisory is for
+        // lanes whose ENTIRE output resisted structuring.
+        let lane_has_structured = record.lane.as_deref().is_some_and(|lane| {
+            evidence.iter().any(|other| {
+                other.lane.as_deref() == Some(lane)
+                    && other.kind != "unstructured"
+                    && other.kind != "objective"
+                    && other.kind != "subagent-session"
+            })
+        });
+        if lane_has_structured {
+            continue;
+        }
         push(
             format!("wl:re-task:{}", record.id),
             "re-task-or-accept",

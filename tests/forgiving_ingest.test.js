@@ -478,3 +478,181 @@ test("unknown verifier status and stringly score are parked, not rejected", (t) 
   assert.equal(rec.status, "proposed", "unrecognized status must park as proposed (non-passing, gate-visible)");
   assert.equal(rec.verifier_score, 1.0, "stringly score must coerce to number");
 });
+
+// ---------------------------------------------------------------------------
+// Field fixes, 2026-07-13 NTM zero-visual run (22 lanes, 95 records):
+// citation rescue ladder, BLOCKED false-positive hardening, commit-hash
+// anchors, durable gate verdict, flag-like objectives.
+// ---------------------------------------------------------------------------
+
+test("citation rescue: absolute-ish prefixes strip down to a real repo path (repair, not demotion)", (t) => {
+  const runDir = freshRunDir("rescue-prefix");
+  t.after(() => removeDir(runDir));
+
+  const from = writeLane(
+    runDir,
+    "rescue-lane",
+    "The readiness harness rewires matchers in Users/somebody/checkout/scripts/readiness.mjs:12 as shipped.\n",
+  );
+  const result = ingest(runDir, "rescue-lane", from);
+  assert.equal(result.status, 0, `ingest failed: ${result.stderr}`);
+  const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  const rec = evidence.find((r) => r.rationale === "harvested-from-prose");
+  assert.ok(rec, "claim must be harvested");
+  assert.ok(
+    rec.source_ids.some((id) => id === "file:scripts/readiness.mjs:12"),
+    `citation must be rescued to the repo-relative path, got ${JSON.stringify(rec.source_ids)}`,
+  );
+  assert.equal((rec.provenance_warnings ?? []).length, 0, "rescue is a repair, never a demotion");
+  const report = JSON.parse(result.stdout);
+  assert.ok(
+    (report.repair_notes ?? []).some((n) => n.includes("citation-rescue")),
+    "rescue must be logged as a repair",
+  );
+});
+
+test("citation rescue: unique tracked basename resolves; unknown basename stays demoted", (t) => {
+  const runDir = freshRunDir("rescue-basename");
+  t.after(() => removeDir(runDir));
+
+  const from = writeLane(
+    runDir,
+    "basename-lane",
+    [
+      "The gate change lands in elsewhere/strict-gate.mjs:5 as reviewed.",
+      "The phantom change lands in elsewhere/never-anywhere.xyz:3 supposedly.",
+    ].join("\n") + "\n",
+  );
+  const result = ingest(runDir, "basename-lane", from);
+  assert.equal(result.status, 0, `ingest failed: ${result.stderr}`);
+  const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  const gateRec = evidence.find((r) => (r.source_ids ?? []).some((id) => id.includes("strict-gate.mjs")));
+  assert.ok(gateRec, "strict-gate claim harvested");
+  assert.ok(
+    gateRec.source_ids.some((id) => id === "file:scripts/strict-gate.mjs:5"),
+    `unique basename must rescue to the tracked path, got ${JSON.stringify(gateRec.source_ids)}`,
+  );
+  const phantomRec = evidence.find((r) => (r.source_ids ?? []).some((id) => id.includes("unverifiable")));
+  assert.ok(phantomRec, "a basename tracked nowhere must stay demoted, never guessed");
+});
+
+test("BLOCKED hardening: scoreboards, counters, and quoted fences never halt a lane; real reasons still do", (t) => {
+  const runDir = freshRunDir("blocked-tuning");
+  t.after(() => removeDir(runDir));
+
+  const noisy = writeLane(
+    runDir,
+    "scoreboard-lane",
+    [
+      "Corpus sweep results below.",
+      "BLOCKED 1377 -> 1377",
+      "BLOCKED 3/44 -> 2/44 (json)",
+      "BLOCKED=1377",
+      "> ```",
+      "> BLOCKED: quoted report contents, not our halt",
+      "> ```",
+      "Sweep complete, see agent-tools/compare-web-capture-ab.test.ts:1 for the harness.",
+    ].join("\n") + "\n",
+  );
+  const noisyResult = ingest(runDir, "scoreboard-lane", noisy);
+  assert.equal(noisyResult.status, 0, `ingest failed: ${noisyResult.stderr}`);
+  let evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  assert.ok(
+    !evidence.some((r) => r.kind === "blocker" && r.lane === "scoreboard-lane"),
+    "scoreboard shapes must never mint blocker records",
+  );
+
+  const real = writeLane(runDir, "stuck-lane", "BLOCKED: waiting on the prod API key from John\n");
+  const realResult = ingest(runDir, "stuck-lane", real);
+  assert.equal(realResult.status, 0, `ingest failed: ${realResult.stderr}`);
+  evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  assert.ok(
+    evidence.some((r) => r.kind === "blocker" && r.lane === "stuck-lane"),
+    "a real prose reason must still halt the lane",
+  );
+});
+
+test("commit-hash anchors: real commits harvest as verified citations, fake ones demote; gate persists its verdict", (t) => {
+  const runDir = freshRunDir("commit-anchor");
+  t.after(() => removeDir(runDir));
+
+  const head = spawnSync("git", ["-C", repoRoot, "rev-parse", "--short=10", "HEAD"], {
+    encoding: "utf8",
+  }).stdout.trim();
+  assert.ok(/^[0-9a-f]{10}$/.test(head), `need a hex HEAD sha, got ${head}`);
+
+  const from = writeLane(
+    runDir,
+    "commit-lane",
+    [
+      `Census commit \`${head}\` reports 89 unresolved container-variant rules.`,
+      "A made-up commit `abc123def4` anchors this bogus claim.",
+    ].join("\n") + "\n",
+  );
+  const result = ingest(runDir, "commit-lane", from);
+  assert.equal(result.status, 0, `ingest failed: ${result.stderr}`);
+  const evidence = readJsonl(path.join(runDir, "worker-results", "evidence.jsonl"));
+  const realRec = evidence.find((r) => (r.source_ids ?? []).includes(`commit:${head}`));
+  assert.ok(realRec, "real commit citation must survive verification");
+  assert.equal((realRec.provenance_warnings ?? []).length, 0, "verified commit is not a demotion");
+  const fakeRec = evidence.find((r) =>
+    (r.source_ids ?? []).some((id) => id.startsWith("log:unverifiable-commit-")),
+  );
+  assert.ok(fakeRec, "fake commit citation must demote");
+  assert.ok((fakeRec.provenance_warnings ?? []).length > 0, "fake commit demotion carries the warning");
+
+  // Packet + gate survive commit: ids, and the gate writes its own verdict
+  // file - the terminal is not the system of record.
+  const compile = runNode(["driver.mjs", "--run-dir", runDir]);
+  assert.equal(compile.status, 0, `compile failed: ${compile.stderr}`);
+  runNode(["scripts/strict-gate.mjs", "--run-dir", runDir], {
+    env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" },
+  });
+  const persisted = path.join(runDir, "state", "gate-report.json");
+  assert.ok(fs.existsSync(persisted), "gate must persist state/gate-report.json unprompted");
+  const gateReport = JSON.parse(fs.readFileSync(persisted, "utf8"));
+  assert.equal(typeof gateReport.ok, "boolean", "persisted verdict must be the real report");
+});
+
+test("flag-like objectives are rejected instead of scaffolding a run named --help", (t) => {
+  const result = runNode(["driver.mjs", "--help", "extra-arg"]);
+  assert.equal(result.status, 2, `expected usage failure, got ${result.status}: ${result.stdout}`);
+  assert.ok(
+    /unrecognized flag/.test(result.stderr),
+    `stderr must name the rejected flag: ${result.stderr}`,
+  );
+});
+
+test("re-task advisory is suppressed when the same lane also delivered structured records", (t) => {
+  const runDir = freshRunDir("retask-suppress");
+  t.after(() => removeDir(runDir));
+
+  const fenced = writeLane(
+    runDir,
+    "mixed-lane-records",
+    '```receipts-evidence-jsonl\n{"id":"ev-mixed-1","kind":"observation","summary":"structured half of the report","source_ids":["raw:objective.md"]}\n```\n',
+  );
+  assert.equal(ingest(runDir, "mixed-lane", fenced).status, 0);
+  const prose = writeLane(
+    runDir,
+    "mixed-lane-prose",
+    "A rich paragraph with no harvestable citations at all, just narrative reasoning about the approach and tradeoffs considered.\n",
+  );
+  assert.equal(ingest(runDir, "mixed-lane", prose).status, 0);
+
+  const solo = writeLane(
+    runDir,
+    "prose-only-lane",
+    "Nothing but narrative here too, equally free of any concrete citation shapes.\n",
+  );
+  assert.equal(ingest(runDir, "prose-only", solo).status, 0);
+
+  const compile = runNode(["driver.mjs", "--run-dir", runDir]);
+  assert.equal(compile.status, 0, `compile failed: ${compile.stderr}`);
+  const packet = JSON.parse(
+    fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"),
+  );
+  const retasks = (packet.candidate_actions ?? []).filter((a) => a.category === "re-task-or-accept");
+  assert.equal(retasks.length, 1, `only the prose-ONLY lane earns the advisory: ${JSON.stringify(retasks.map((r) => r.title))}`);
+  assert.ok(retasks[0].title.includes("prose-only"), `advisory must target the prose-only lane: ${retasks[0].title}`);
+});

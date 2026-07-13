@@ -102,6 +102,7 @@ USAGE:
 COMMANDS:
     init <dir> [--repo-root <path>]   Scaffold a run directory (repo_root defaults to cwd)
     run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] -- <command...>
+    run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] --exe <program> [--arg <token>]...
                             Execute a command and mint a tamper-evident execution
                             receipt in receipts/receipts.jsonl (exit code = child's)
     diff --run-dir <dir> [--note <text>] [--patch]
@@ -231,16 +232,7 @@ fn resolve_worklist_item(args: Vec<String>) -> Result<(), Box<dyn std::error::Er
 /// author. Exits with the CHILD's exit code so orchestrator scripting sees
 /// reality; the receipt is minted either way.
 fn run_with_receipt(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let separator = args
-        .iter()
-        .position(|arg| arg == "--")
-        .ok_or("`run` usage: receipts run --run-dir <dir> [--lane L] [--agent-id A] [--label test:name] -- <command...>")?;
-    let (flags, command_line) = args.split_at(separator);
-    let command_line = &command_line[1..];
-    if command_line.is_empty() {
-        return Err("`run` requires a command after `--`".into());
-    }
-    let flags: Vec<String> = flags.to_vec();
+    let (flags, command_line) = parse_run_invocation(args)?;
     let run_dir = PathBuf::from(
         parse_flag_value(&flags, "--run-dir").ok_or("`run` requires --run-dir <dir>")?,
     );
@@ -302,7 +294,7 @@ fn run_with_receipt(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         ReceiptRecord {
             id: String::new(),
             label,
-            cmd: command_line.to_vec(),
+            cmd: command_line,
             cwd: cwd.to_string_lossy().to_string(),
             exit_code,
             duration_ms,
@@ -337,6 +329,101 @@ fn run_with_receipt(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>>
         })
     );
     std::process::exit(exit_code as i32);
+}
+
+fn parse_run_invocation(
+    args: Vec<String>,
+) -> Result<(Vec<String>, Vec<String>), Box<dyn std::error::Error>> {
+    let mut scan = 0;
+    let mut separator = None;
+    while scan < args.len() {
+        if args[scan] == "--" {
+            separator = Some(scan);
+            break;
+        }
+        if matches!(
+            args[scan].as_str(),
+            "--run-dir" | "--lane" | "--agent-id" | "--label" | "--exe" | "--arg"
+        ) {
+            scan += 2;
+        } else {
+            scan += 1;
+        }
+    }
+    if let Some(separator) = separator {
+        let flags = args[..separator].to_vec();
+        if flags.iter().any(|arg| arg == "--exe" || arg == "--arg") {
+            return Err("`run` cannot combine `--` with `--exe`/`--arg`".into());
+        }
+        validate_run_flags(&flags)?;
+        let command = args[separator + 1..].to_vec();
+        if command.is_empty() {
+            return Err("`run` requires a command after `--`".into());
+        }
+        return Ok((flags, command));
+    }
+
+    let mut flags = Vec::new();
+    let mut command = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--run-dir" | "--lane" | "--agent-id" | "--label" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| format!("`{}` requires a value", args[index]))?;
+                if value.starts_with("--") {
+                    return Err(format!("`{}` requires a value", args[index]).into());
+                }
+                flags.extend([args[index].clone(), value.clone()]);
+                index += 2;
+            }
+            "--exe" => {
+                if !command.is_empty() {
+                    return Err("`run` accepts exactly one `--exe`".into());
+                }
+                let executable = args.get(index + 1).ok_or("`--exe` requires a program")?;
+                if executable.starts_with("--") {
+                    return Err("`--exe` requires a program".into());
+                }
+                command.push(executable.clone());
+                index += 2;
+            }
+            "--arg" => {
+                if command.is_empty() {
+                    return Err("`--arg` requires a preceding `--exe <program>`".into());
+                }
+                let value = args.get(index + 1).ok_or("`--arg` requires one token")?;
+                command.push(value.clone());
+                index += 2;
+            }
+            unknown => return Err(format!("unknown `run` argument `{unknown}`").into()),
+        }
+    }
+    if command.is_empty() {
+        return Err("`run` requires either `-- <command...>` or `--exe <program>`".into());
+    }
+    validate_run_flags(&flags)?;
+    Ok((flags, command))
+}
+
+fn validate_run_flags(flags: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    let mut index = 0;
+    while index < flags.len() {
+        match flags[index].as_str() {
+            "--run-dir" | "--lane" | "--agent-id" | "--label" => {
+                if flags
+                    .get(index + 1)
+                    .is_none_or(|value| value.starts_with("--"))
+                {
+                    return Err(format!("`{}` requires a value", flags[index]).into());
+                }
+                index += 2;
+            }
+            unknown => return Err(format!("unknown `run` flag `{unknown}`").into()),
+        }
+    }
+    Ok(())
 }
 
 /// Phase 1: mint a WORK receipt capturing what changed in repo_root's tree.

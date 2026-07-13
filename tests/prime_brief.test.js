@@ -194,3 +194,38 @@ test("lane digests are conservative and receipts next renders the brief", (t) =>
   assert.ok(Array.isArray(parsed.lane_digests) && parsed.lane_digests.length >= 2);
   assert.equal(parsed.verdict, "gate-not-recorded");
 });
+
+test("brief surfaces FAILED CHECKS for red labels with no passing successor, and clears on supersession", (t) => {
+  const runDir = freshRunDir("failed-checks");
+  t.after(() => removeDir(runDir));
+
+  // A label that fails and is then "fixed" under a DIFFERENT label - the
+  // field pattern (2026-07-13 NTM run: test:cmd exit 1, then test:cmd2
+  // green) that left a red receipt invisible at the bottom of the list.
+  assert.equal(
+    coreBin(["run", "--run-dir", runDir, "--lane", "orchestrator", "--agent-id", "prime", "--label", "test:doomed", "--", "node", "-e", "process.exit(3)"]).status,
+    3,
+    "exit code must propagate",
+  );
+  assert.equal(
+    coreBin(["run", "--run-dir", runDir, "--lane", "orchestrator", "--agent-id", "prime", "--label", "test:fine", "--", "node", "-e", "process.exit(0)"]).status,
+    0,
+  );
+  assert.equal(runNode(["driver.mjs", "--run-dir", runDir]).status, 0);
+
+  const red = coreBin(["next", "--run-dir", runDir]);
+  assert.equal(red.status, 0, red.stderr);
+  assert.ok(red.stdout.includes("FAILED CHECKS (1)"), `brief must call out the red label: ${red.stdout}`);
+  assert.ok(/FAILED CHECKS[\s\S]*test:doomed/.test(red.stdout), "the red label is named");
+  assert.ok(red.stdout.includes("re-run the SAME label to supersede"), "brief teaches supersession");
+
+  // Re-running the SAME label green supersedes: the section disappears.
+  assert.equal(
+    coreBin(["run", "--run-dir", runDir, "--lane", "orchestrator", "--agent-id", "prime", "--label", "test:doomed", "--", "node", "-e", "process.exit(0)"]).status,
+    0,
+  );
+  assert.equal(runNode(["driver.mjs", "--run-dir", runDir]).status, 0);
+  const green = coreBin(["next", "--run-dir", runDir]);
+  assert.equal(green.status, 0, green.stderr);
+  assert.ok(!green.stdout.includes("FAILED CHECKS"), `superseded label must clear the section: ${green.stdout}`);
+});

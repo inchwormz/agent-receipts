@@ -166,6 +166,39 @@ pub fn generate_brief(run_dir: &Path, as_json: bool) -> Result<String, Box<dyn s
     }
 
     if !receipts.is_empty() {
+        // Failed checks with no passing successor come FIRST. Field
+        // pattern (2026-07-13): a failed `test:cmd` got "fixed" by minting
+        // a fresh label instead of re-running the same one, so the red
+        // receipt sat invisible at the bottom of the list. Supersession
+        // only works per-label; Prime has to SEE the labels still red.
+        let mut latest_by_label: std::collections::BTreeMap<&str, &crate::schema::ReceiptRecord> =
+            std::collections::BTreeMap::new();
+        for receipt in &receipts {
+            if let Some(label) = receipt.label.as_deref() {
+                if label != crate::compiler::receipts::WORK_LABEL {
+                    latest_by_label.insert(label, receipt);
+                }
+            }
+        }
+        let failing: Vec<_> = latest_by_label
+            .values()
+            .filter(|receipt| receipt.exit_code != 0)
+            .collect();
+        if !failing.is_empty() {
+            out.push_str(&format!(
+                "\nFAILED CHECKS ({}) - latest receipt red, no passing successor; re-run the SAME label to supersede\n",
+                failing.len()
+            ));
+            for receipt in failing {
+                out.push_str(&format!(
+                    "  {} [{}] exit {} - {}\n",
+                    receipt.id,
+                    receipt.label.as_deref().unwrap_or("-"),
+                    receipt.exit_code,
+                    truncate(&receipt.cmd.join(" "), 70)
+                ));
+            }
+        }
         out.push_str(&format!("\nRECEIPTS ({})\n", receipts.len()));
         for receipt in &receipts {
             out.push_str(&format!(
