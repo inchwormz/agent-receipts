@@ -34,6 +34,10 @@ const COMMANDS = [
   "adjudicate",
   "import-eval",
   "calibration",
+  "score",
+  "publish",
+  "cards",
+  "index",
 ];
 
 function printHelp() {

@@ -82,6 +82,22 @@ pub struct FeatureScale {
     pub scale: f64,
 }
 
+#[derive(Debug, Clone)]
+pub struct RuntimeFeatures {
+    pub agent_variant: String,
+    pub task_family: String,
+    pub repository_id: String,
+    pub language: String,
+    pub freshness: String,
+    pub environment_match: String,
+    pub negative_control_status: String,
+    pub verifier_independent: bool,
+    pub verification_strength: f64,
+    pub attempts: f64,
+    pub flakiness: f64,
+    pub change_size: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TrainerIdentity {
@@ -372,7 +388,7 @@ fn beta_cdf(x: f64, alpha: f64, beta: f64) -> f64 {
     }
 }
 
-fn beta_quantile(probability: f64, alpha: f64, beta: f64) -> f64 {
+pub(crate) fn beta_quantile(probability: f64, alpha: f64, beta: f64) -> f64 {
     let mut low = 0.0;
     let mut high = 1.0;
     for _ in 0..100 {
@@ -1213,7 +1229,7 @@ fn recompute_metrics(
     })
 }
 
-fn percentile(sorted: &[f64], probability: f64) -> f64 {
+pub(crate) fn percentile(sorted: &[f64], probability: f64) -> f64 {
     let index = probability * (sorted.len() - 1) as f64;
     let lower = index.floor() as usize;
     let upper = index.ceil() as usize;
@@ -1222,6 +1238,69 @@ fn percentile(sorted: &[f64], probability: f64) -> f64 {
     } else {
         sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower as f64)
     }
+}
+
+pub(crate) fn runtime_hierarchical_draws(
+    bundle: &CalibrationBundle,
+    features: &RuntimeFeatures,
+) -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+    if bundle.model_kind != "hierarchical" {
+        return Err("runtime hierarchical scoring requires a hierarchical bundle".into());
+    }
+    let intercept = bundle
+        .model_parameters
+        .get("intercept")
+        .ok_or("hierarchical bundle is missing intercept draws")?;
+    let numeric = [
+        ("verification_strength", features.verification_strength),
+        ("attempts", features.attempts),
+        ("flakiness", features.flakiness),
+        ("change_size", features.change_size),
+    ];
+    let categorical = [
+        ("agent_variant", features.agent_variant.clone()),
+        ("task_family", features.task_family.clone()),
+        ("repository_id", features.repository_id.clone()),
+        ("language", features.language.clone()),
+        ("freshness", features.freshness.clone()),
+        ("environment_match", features.environment_match.clone()),
+        (
+            "negative_control_status",
+            features.negative_control_status.clone(),
+        ),
+        (
+            "verifier_independent",
+            features.verifier_independent.to_string(),
+        ),
+    ];
+    let mut draws = Vec::with_capacity(intercept.len());
+    for draw in 0..intercept.len() {
+        let mut logit = intercept[draw];
+        for (name, value) in numeric {
+            let scale = bundle
+                .feature_scaling
+                .get(name)
+                .ok_or_else(|| format!("hierarchical bundle is missing `{name}` scale"))?;
+            let beta = bundle
+                .model_parameters
+                .get(&format!("numeric:{name}"))
+                .ok_or_else(|| format!("hierarchical bundle is missing `{name}` draws"))?;
+            if beta.len() != intercept.len() {
+                return Err("hierarchical numeric draw count mismatch".into());
+            }
+            logit += beta[draw] * ((value - scale.mean) / scale.scale);
+        }
+        for (name, value) in &categorical {
+            if let Some(effect) = bundle.model_parameters.get(&format!("{name}:{value}")) {
+                if effect.len() != intercept.len() {
+                    return Err("hierarchical category draw count mismatch".into());
+                }
+                logit += effect[draw];
+            }
+        }
+        draws.push(1.0 / (1.0 + (-logit.clamp(-30.0, 30.0)).exp()));
+    }
+    Ok(draws)
 }
 
 pub fn promote_hierarchical(

@@ -1,0 +1,42 @@
+name: public-reliability-data
+
+on:
+  pull_request:
+    paths:
+      - "public-data/**"
+      - "receipts-compiler/**"
+      - "bin/**"
+      - "tests/reliability_cards.test.js"
+      - ".github/workflows/public-reliability-data.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm install --ignore-scripts
+      - run: node --test tests/reliability_cards.test.js
+      - name: Verify committed public data and rebuild static cards
+        shell: bash
+        run: |
+          if find public-data -type f -name '*.json' -print -quit | grep -q .; then
+            rm -rf "$RUNNER_TEMP/receipts-public-cards"
+            node bin/receipts.mjs cards build --data public-data --out "$RUNNER_TEMP/receipts-public-cards"
+          else
+            echo "No public reliability submissions in this release."
+          fi
+      - run: git diff --check

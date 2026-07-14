@@ -97,7 +97,7 @@ New execution records are canonical V2 envelopes in the one `receipts/receipts.j
 
 Signatures prove continuity of one executor identity and detect post-hoc alteration. They do **not** prove that a claim is true, make the signing user independent, or protect a host already compromised while Receipts is running. Independence still requires a valid signature from a separately authenticated principal. Legacy FNV records remain readable and are always labeled `legacy_weak`; the engine never rewrites or silently upgrades them.
 
-Raw artifacts, prompts, source text, repository URLs, and absolute paths stay local. `receipts project-public --run-dir <d> --out <file>` constructs a new deterministic allowlist-only aggregate; it never redacts a copy of the private packet. Publication consent and public cards are separate later-stage operations.
+Raw artifacts, prompts, source text, repository URLs, and absolute paths stay local. `receipts project-public --run-dir <d> --out <file>` constructs a new deterministic allowlist-only aggregate; it never redacts a copy of the private packet. Public reliability cards additionally require an explicit private consent file and pass a fail-closed secret/path scanner before they can enter `public-data/`.
 
 ## Typed trust
 
@@ -153,6 +153,41 @@ receipts calibration promote --dataset calibration.dataset.json \
 ```
 
 The signed dataset fixes grouped repository/task holdouts before Python runs. The lock pins Python 3.12, PyMC, NumPy, and all transitive packages; the trainer fixes its seed and forces one compute thread. Rust then recomputes held-out metrics and refuses promotion unless there are at least 500 effective outcomes, five exact model-agent variants, and three task families with 50 outcomes each; Brier score improves at least 5% over the cohort base rate, expected calibration error is at most `0.05`, calibration slope is `0.8–1.2`, and the 95% posterior interval is at most `0.20` wide. A Python-authored `calibrated` label has no authority.
+
+## Local scores and public reliability cards
+
+Categorical trust is evaluated before statistics. A stale, unbound, mismatched,
+failed, refuted, or unknown critical claim suppresses the false-green
+probability even when a calibration bundle contains one:
+
+```bash
+receipts score --run-dir .receipts/runs/fix-login --bundle calibration.bundle.json
+receipts publish --run-dir .receipts/runs/fix-login \
+  --consent private-consent.json --out public-data
+receipts cards build --data public-data --out generated-cards
+```
+
+Public records are fixed-field projections signed with Ed25519 and licensed
+CC BY 4.0. The consent file stays private because it may contain local paths.
+Static JSON and HTML generation is deterministic and requires a clean output
+directory so stale files cannot survive. There is no database, API, telemetry,
+automatic upload, or hosted scoring service.
+
+## Agentic Coding Reliability Index
+
+An index release uses a pinned, versioned, equal-weight task-family mix:
+
+```bash
+receipts index build --data public-data --task-mix task-mix.json --out index-v1
+```
+
+The index is withheld unless a model-agent variant has 200 effective public
+outcomes, three pinned task families with 30 outcomes each, exact model, agent,
+harness, and authenticated judge identities, a false-green 95% interval no
+wider than `0.10`, and passing held-out calibration. Eligible variants use
+`100 × (1 − equal-weight upper 95% false-green risk)`. Missing families are
+never imputed. Each immutable release pins input card hashes, dataset and
+calibration-bundle hashes, methodology, task mix, and card-generator version.
 
 ## What it catches
 
@@ -292,4 +327,5 @@ A trust tool that hides its own gaps is broken at the root, so here are ours, in
 
 ## License
 
-MIT. Built by agents, supervised by receipts.
+Code is MIT. Project-authored public reliability data is CC BY 4.0. Built by
+agents, supervised by receipts.

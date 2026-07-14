@@ -287,6 +287,80 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 _ => Err("usage: receipts calibration dataset|build --runs <dir> [--imports <dir>] --out <file> | calibration verify --bundle <file>".into()),
             }
         }
+        "score" => {
+            let rest: Vec<String> = args.collect();
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir").ok_or("`score` requires --run-dir <dir>")?,
+            );
+            let bundle = PathBuf::from(
+                parse_flag_value(&rest, "--bundle").ok_or("`score` requires --bundle <bundle>")?,
+            );
+            preflight_run_dir(&run_dir)?;
+            let score = receipts_core::compiler::scoring::score_run(&run_dir, &bundle)?;
+            println!("{}", serde_json::to_string_pretty(&score)?);
+            Ok(())
+        }
+        "publish" => {
+            let rest: Vec<String> = args.collect();
+            let run_dir = PathBuf::from(
+                parse_flag_value(&rest, "--run-dir").ok_or("`publish` requires --run-dir <dir>")?,
+            );
+            let consent = PathBuf::from(
+                parse_flag_value(&rest, "--consent")
+                    .ok_or("`publish` requires --consent <file>")?,
+            );
+            let out = PathBuf::from(
+                parse_flag_value(&rest, "--out").ok_or("`publish` requires --out <dir>")?,
+            );
+            preflight_run_dir(&run_dir)?;
+            let path = receipts_core::compiler::publication::publish_run(&run_dir, &consent, &out)?;
+            println!("public reliability card written: {}", path.display());
+            Ok(())
+        }
+        "cards" => {
+            let rest: Vec<String> = args.collect();
+            if rest.first().map(String::as_str) != Some("build") {
+                return Err("usage: receipts cards build --data <dir> --out <dir>".into());
+            }
+            let data = PathBuf::from(
+                parse_flag_value(&rest, "--data").ok_or("`cards build` requires --data <dir>")?,
+            );
+            let out = PathBuf::from(
+                parse_flag_value(&rest, "--out").ok_or("`cards build` requires --out <dir>")?,
+            );
+            let count = receipts_core::compiler::publication::build_cards(&data, &out)?;
+            println!(
+                "built {count} static reliability card(s): {}",
+                out.display()
+            );
+            Ok(())
+        }
+        "index" => {
+            let rest: Vec<String> = args.collect();
+            if rest.first().map(String::as_str) != Some("build") {
+                return Err(
+                    "usage: receipts index build --data <dir> --task-mix <file> --out <dir>".into(),
+                );
+            }
+            let data = PathBuf::from(
+                parse_flag_value(&rest, "--data").ok_or("`index build` requires --data <dir>")?,
+            );
+            let task_mix = PathBuf::from(
+                parse_flag_value(&rest, "--task-mix")
+                    .ok_or("`index build` requires --task-mix <file>")?,
+            );
+            let out = PathBuf::from(
+                parse_flag_value(&rest, "--out").ok_or("`index build` requires --out <dir>")?,
+            );
+            let release = receipts_core::compiler::index::build_index(&data, &task_mix, &out)?;
+            println!(
+                "reliability index {}: {} ({} variant(s))",
+                release.release_id,
+                release.release_status,
+                release.variants.len()
+            );
+            Ok(())
+        }
         "diff" => {
             let rest: Vec<String> = args.collect();
             diff_with_receipt(rest)
@@ -377,6 +451,14 @@ COMMANDS:
                             Verify bundle hash, signature, and eligibility shape
     calibration promote --dataset <file> --trainer-output <file> --lock <uv.lock> --out <bundle>
                             Recompute release gates and sign a hierarchical bundle
+    score --run-dir <dir> --bundle <bundle>
+                            Score current bound claims; categorical red gates suppress probability
+    publish --run-dir <dir> --consent <file> --out <dir>
+                            Build a signed, allowlist-only CC BY 4.0 public projection
+    cards build --data <dir> --out <dir>
+                            Verify signed public data and build deterministic static JSON/HTML cards
+    index build --data <dir> --task-mix <file> --out <dir>
+                            Publish an index only for calibrated variants meeting every fixed gate
     diff --run-dir <dir> [--note <text>] [--patch]
                             Mint a WORK receipt: what changed in repo_root's tree
                             (numstat summary by default; --patch embeds the full

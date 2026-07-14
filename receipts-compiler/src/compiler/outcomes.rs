@@ -171,7 +171,7 @@ fn verify_citation(
     Err("outcome citations must be verified file: or commit: anchors".into())
 }
 
-fn change_size(repo_root: &Path) -> ChangeSize {
+pub(crate) fn change_size(repo_root: &Path) -> ChangeSize {
     let output = std::process::Command::new("git")
         .args([
             "-C",
@@ -214,7 +214,7 @@ fn change_size(repo_root: &Path) -> ChangeSize {
     size
 }
 
-fn repository_id(repo_root: &Path) -> String {
+pub(crate) fn repository_id(repo_root: &Path) -> String {
     let output = std::process::Command::new("git")
         .args([
             "-C",
@@ -241,7 +241,7 @@ fn repository_id(repo_root: &Path) -> String {
     )
 }
 
-fn language(repo_root: &Path) -> String {
+pub(crate) fn language(repo_root: &Path) -> String {
     let output = std::process::Command::new("git")
         .args([
             "-C",
@@ -285,7 +285,7 @@ fn language(repo_root: &Path) -> String {
     }
 }
 
-fn freshness(packet: &NextPassPacket) -> String {
+pub(crate) fn freshness(packet: &NextPassPacket) -> String {
     if packet.trust_assessments.is_empty() {
         return "unknown".to_string();
     }
