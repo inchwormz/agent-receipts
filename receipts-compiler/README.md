@@ -17,11 +17,15 @@ Part of the [agent-receipts](https://github.com/inchwormz/agent-receipts) projec
 
 ## Install
 
-Install the public package; it builds and verifies this bundled engine source:
+Install the standalone Rust CLI from crates.io:
 
 ```bash
-npm install -g github:inchwormz/agent-receipts
+cargo install receipts-core --locked
+receipts doctor
 ```
+
+Or install the full npm dispatcher plus bundled engine source from the public
+repository with `npm install -g github:inchwormz/agent-receipts`.
 
 ## Run
 

@@ -2,14 +2,15 @@
 name = "receipts-core"
 version = "0.2.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["inchwormz <johnrichardmckeown@gmail.com>"]
-description = "Explicit-state recurrent synthesis: deterministic packet compiler for AI agent runs. Takes subagent output (evidence.jsonl, verifier findings, raw artifacts) and compiles a schema-validated, hash-provenanced next-pass packet that Prime can reason over without consuming raw subagent prose."
+description = "Local-first tamper-evident proof, typed trust, calibrated false-green risk, and reliability cards for AI agent work."
 license = "MIT"
 repository = "https://github.com/inchwormz/agent-receipts"
 homepage = "https://github.com/inchwormz/agent-receipts"
-documentation = "https://github.com/inchwormz/agent-receipts/tree/main/receipts-compiler"
+documentation = "https://docs.rs/receipts-core"
 readme = "README.md"
-keywords = ["ai", "agents", "determinism", "provenance", "compiler"]
+keywords = ["ai", "agents", "provenance", "verification", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 
 [lib]

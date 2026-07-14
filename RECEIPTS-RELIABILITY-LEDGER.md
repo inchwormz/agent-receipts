@@ -174,3 +174,15 @@ The highest-risk assumption is that current green tests measure the shipped path
 - **Verified isolated Rust release suite:** `cargo test --locked` with `CARGO_TARGET_DIR=C:\Users\johnr\AppData\Local\Temp\agent-receipts-v020-release-rust-20260714` passed **67 tests total** against `receipts-core v0.2.0`.
 - **Verified release readiness/package:** readiness passed; npm dry-run packing produced `agent-receipts-0.2.0.tgz` with **66 intended files**. Formatter and diff checks passed.
 - **Release boundary:** this checkpoint authorizes a normal push of `main` to the existing GitHub remote only. No npm publication, Git tag, GitHub Release, Pages deployment, or index/data release is implied.
+
+### 2026-07-14 — crates.io release preparation
+
+- **Verified registry baseline:** the crates.io API returned `404` for `receipts-core`; the name was available before this release attempt.
+- **Verified archive-identity red:** `cargo publish --dry-run --locked` produced a valid registry archive, but installing that extracted archive reported `build_commit: unresolved` because crates.io packages do not contain the repository's `.git` directory.
+- **Root cause:** the build script only read an explicit environment value or `git rev-parse`; it ignored Cargo's archive-owned `.cargo_vcs_info.json`, which contains the exact committed source SHA.
+- **Verified focused green:** the new archive identity contract accepts an exact 40-character Cargo VCS SHA and rejects `unresolved`. The build script uses that source only after explicit and live-Git identity, and watches the VCS file only when it exists so normal commands do not rebuild endlessly.
+- **Verified final Node result:** `npm run test:node` passed **93/93 tests** after the final build-script change.
+- **Verified final Rust result:** isolated `cargo test --locked` passed **68/68 tests** (59 library + 1 registry archive identity + 1 determinism + 1 init + 4 argv + 2 compatibility).
+- **Verified readiness/package shape:** `receipts readiness: passed`; npm dry-run packing produced **67 intended files**, including `build_support.rs`. Formatter and `git diff --check` passed.
+- **Credential handling:** a `CRATES_IO_KEY` entry exists in `C:\Users\johnr\Projects\sitesorted\.env.local`; its value was not printed or copied into this repository. Publication will expose it only through the process environment and clear it afterward.
+- Next: commit and push this exact release source, prove the extracted `.crate` reports that new commit SHA, then publish and verify a fresh registry install.

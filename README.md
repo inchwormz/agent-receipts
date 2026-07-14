@@ -280,7 +280,14 @@ The drill-down handles matter: when you do want a lane's reasoning, you open the
 
 ## Install
 
-Requires `git`, `cargo` (Rust), and `node`/`npm`.
+Install the standalone Rust CLI from crates.io with Rust `1.85` or newer:
+
+```bash
+cargo install receipts-core --locked
+receipts doctor
+```
+
+The repository installers require `git`, `cargo` (Rust), and `node`/`npm`:
 
 ```bash
 # macOS / Linux

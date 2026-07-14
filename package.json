@@ -24,6 +24,7 @@
     "receipts-compiler/Cargo.toml",
     "receipts-compiler/Cargo.lock",
     "receipts-compiler/build.rs",
+    "receipts-compiler/build_support.rs",
     "receipts-compiler/build-source.json",
     "receipts-compiler/src/",
     "receipts-compiler/schemas/",
