@@ -2,7 +2,7 @@
 
 **Proof-of-work for AI agents.** When your agent says "done, all tests pass", Agent Receipts either has the receipt or labels the claim what it is: unverified.
 
-[![Release: 0.2.0](https://img.shields.io/badge/release-0.2.0-135f46.svg)](https://github.com/inchwormz/agent-receipts) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE) [![Rust](https://img.shields.io/badge/engine-Rust-orange.svg)](./receipts-compiler) [![Zero agent burden](https://img.shields.io/badge/agent%20burden-zero-brightgreen.svg)](#zero-burden-on-your-agents)
+[![Release: 0.2.0](https://img.shields.io/badge/release-0.2.0-135f46.svg)](https://github.com/inchwormz/agent-receipts) [![crates.io](https://img.shields.io/crates/v/receipts-core.svg)](https://crates.io/crates/receipts-core) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE) [![Rust](https://img.shields.io/badge/engine-Rust-orange.svg)](./receipts-compiler) [![Zero agent burden](https://img.shields.io/badge/agent%20burden-zero-brightgreen.svg)](#zero-burden-on-your-agents)
 
 ```text
 you:        "run the test suite and fix what's broken"
@@ -280,7 +280,8 @@ The drill-down handles matter: when you do want a lane's reasoning, you open the
 
 ## Install
 
-Install the standalone Rust CLI from crates.io with Rust `1.85` or newer:
+Install [`receipts-core` from crates.io](https://crates.io/crates/receipts-core)
+with Rust `1.85` or newer:
 
 ```bash
 cargo install receipts-core --locked

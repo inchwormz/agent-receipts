@@ -186,3 +186,11 @@ The highest-risk assumption is that current green tests measure the shipped path
 - **Verified readiness/package shape:** `receipts readiness: passed`; npm dry-run packing produced **67 intended files**, including `build_support.rs`. Formatter and `git diff --check` passed.
 - **Credential handling:** a `CRATES_IO_KEY` entry exists in `C:\Users\johnr\Projects\sitesorted\.env.local`; its value was not printed or copied into this repository. Publication will expose it only through the process environment and clear it afterward.
 - Next: commit and push this exact release source, prove the extracted `.crate` reports that new commit SHA, then publish and verify a fresh registry install.
+
+### 2026-07-14 — crates.io publication receipt
+
+- **Verified source commit:** `084c5b89a276650cf72e1d35d06d7f0dd92a62c4` is present on `origin/main`.
+- **Verified upload archive:** Cargo packaged **54 files**, 592.3 KiB uncompressed / 132.1 KiB compressed. Installing the extracted archive produced `receipts 0.2.0`, exact build commit `084c5b89a276650cf72e1d35d06d7f0dd92a62c4`, `doctor: ok`, and `receipts readiness: passed`.
+- **Verified publication:** Cargo reported `Published receipts-core v0.2.0 at registry crates-io`. The crates.io API returned version `0.2.0`, crate size `135312`, and checksum `8dc713d606ce895c5439647cb4bc970b11f093785fed596c7f0d8458cbe15022`.
+- **Verified public install:** a new isolated Cargo home downloaded `receipts-core v0.2.0` from the registry and installed the `receipts` binary. Its public binary reported the same exact source commit; `doctor` passed all available checks and readiness passed.
+- **Public crate:** `https://crates.io/crates/receipts-core`.

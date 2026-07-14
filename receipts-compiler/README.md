@@ -17,7 +17,7 @@ Part of the [agent-receipts](https://github.com/inchwormz/agent-receipts) projec
 
 ## Install
 
-Install the standalone Rust CLI from crates.io:
+Install [`receipts-core` from crates.io](https://crates.io/crates/receipts-core):
 
 ```bash
 cargo install receipts-core --locked
