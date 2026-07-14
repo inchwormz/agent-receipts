@@ -2,13 +2,32 @@
 
 **Proof-of-work for AI agents.** When your agent says "done, all tests pass", Agent Receipts either has the receipt or labels the claim what it is: unverified.
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE) [![Rust](https://img.shields.io/badge/engine-Rust-orange.svg)](./receipts-compiler) [![Zero agent burden](https://img.shields.io/badge/agent%20burden-zero-brightgreen.svg)](#zero-burden-on-your-agents)
+[![Release: 0.2.0](https://img.shields.io/badge/release-0.2.0-135f46.svg)](https://github.com/inchwormz/agent-receipts) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE) [![Rust](https://img.shields.io/badge/engine-Rust-orange.svg)](./receipts-compiler) [![Zero agent burden](https://img.shields.io/badge/agent%20burden-zero-brightgreen.svg)](#zero-burden-on-your-agents)
 
 ```text
 you:        "run the test suite and fix what's broken"
 your agent: "Done! Fixed the bug, all 54 tests passing ✅"
 the tests:  were never run
 ```
+
+## New in 0.2.0
+
+- **Typed trust instead of agent confidence.** Integrity, check outcome,
+  applicability, and independently verified claim status are separate; failed
+  checks, stale subjects, and self-authored verifiers fail closed.
+- **One signed Rust authority.** New records use BLAKE3-256 and Ed25519 with an
+  exact engine, executor, repository, environment, and dependency identity.
+- **Exact sessions and independent outcomes.** Model snapshots, agent versions,
+  retry history, adjudicator identity, and cited outcome evidence are captured
+  without guessing mutable model aliases.
+- **Calibrated false-green risk.** A Beta-Binomial baseline and pinned offline
+  hierarchical trainer expose no probability below fixed data and calibration
+  gates.
+- **Local and public reliability cards.** Consent-gated, secret-scanned,
+  signed CC BY 4.0 projections build into deterministic static JSON and HTML.
+- **A withheld-by-default Reliability Index.** No model-agent variant receives
+  a number until its public sample size, task coverage, exact identities,
+  interval width, and held-out calibration all pass.
 
 ## Why
 

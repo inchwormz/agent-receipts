@@ -1,6 +1,6 @@
 [package]
 name = "receipts-core"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["inchwormz <johnrichardmckeown@gmail.com>"]
 description = "Explicit-state recurrent synthesis: deterministic packet compiler for AI agent runs. Takes subagent output (evidence.jsonl, verifier findings, raw artifacts) and compiles a schema-validated, hash-provenanced next-pass packet that Prime can reason over without consuming raw subagent prose."

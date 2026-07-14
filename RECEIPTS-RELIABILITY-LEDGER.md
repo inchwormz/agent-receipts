@@ -165,3 +165,12 @@ The highest-risk assumption is that current green tests measure the shipped path
 - **Not verified:** the generated cards responded HTTP 200 at `http://127.0.0.1:41737/`, but visual browser inspection did not run because the in-app browser connection failed while initializing. The localhost helper was stopped. This is a visual-proof gap, not a card correctness claim.
 - **Campaign calibration remains 0 production outcomes.** Test fixtures prove gates only; no public card or Reliability Index is released.
 - Next: commit this checkpoint without pushing, then re-verify committed identity/readiness. Retry browser inspection when the in-app browser surface is available.
+
+### 2026-07-14 — Version 0.2.0 release checkpoint
+
+- **Verified version alignment:** npm CLI and the Rust engine both report `0.2.0`; `package.json`, `Cargo.toml`, and the root Cargo lock entry agree.
+- **Verified README release surface:** the repository and packaged README now lead with a `0.2.0` release badge and describe typed trust, the single signed Rust authority, exact session/outcome capture, calibrated false-green risk, consent-gated public cards, and the withheld-by-default Reliability Index.
+- **Verified Node release suite:** after pinning the completed source binary, `npm run test:node` passed **93/93 tests** against `agent-receipts@0.2.0`.
+- **Verified isolated Rust release suite:** `cargo test --locked` with `CARGO_TARGET_DIR=C:\Users\johnr\AppData\Local\Temp\agent-receipts-v020-release-rust-20260714` passed **67 tests total** against `receipts-core v0.2.0`.
+- **Verified release readiness/package:** readiness passed; npm dry-run packing produced `agent-receipts-0.2.0.tgz` with **66 intended files**. Formatter and diff checks passed.
+- **Release boundary:** this checkpoint authorizes a normal push of `main` to the existing GitHub remote only. No npm publication, Git tag, GitHub Release, Pages deployment, or index/data release is implied.

@@ -1,6 +1,6 @@
 {
   "name": "agent-receipts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first proof for AI agent claims. One cryptographically identified Rust engine with a tiny npm dispatcher.",
   "license": "MIT",
   "author": "inchwormz <johnrichardmckeown@gmail.com>",
