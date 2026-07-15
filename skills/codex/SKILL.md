@@ -15,26 +15,20 @@ Use this skill when you orchestrate subagents, or run any work whose claims some
 
 Why it exists: agents summarize, embellish, and occasionally lie — and you cannot change agent behavior. Receipts never asks them to. It records what ran as hash-chained events, structures whatever the lanes wrote, and promotes only claims with a current engine-owned check binding. Everything else stays asserted.
 
-## The loop (3 motions)
+## The loop (one safe motion)
 
 ```bash
-# 0. Once per task: scaffold a run (default root: .receipts/runs/)
-receipts init .receipts/runs/<task-slug>
-
-# 1. Per lane, after it reports: save the lane's VERBATIM text to a file, then
-receipts absorb --run-dir <d> --lane <lane> --agent-id <id> --from <report.md>
-#    -> ingests (any format), mints a WORK receipt of tree changes, recompiles.
-
-# 2. Never trust a lane's "tests pass" — run a declared, subject-bound check:
-receipts check --run-dir <d> --id <check-id>
-#    Checks come from .receipts/checks.toml and bind exact subject bytes,
-#    dependency lock, environment, check version, and target claims.
-
-# 3. Close the pass:
-receipts conclude --run-dir <d> --synthesis "<what happened this pass>"
-#    -> recompiles, gates, writes state/report.html, prints the Prime brief.
-#    Its exit code IS the gate: 0 = green, nonzero = read the brief's worklist.
+receipts prove --run-dir .receipts/runs/<task-slug> \
+  --report <lane>:<agent-id>:<report.md> \
+  --synthesis "<what happened this pass>"
+# Repeat --report for every lane. Prove initializes or resumes, absorbs reports,
+# runs ALL checks from .receipts/checks.toml by default, concludes, reports, and
+# fails if any stage is red or zero report claims are actually check-bound.
 ```
+
+Do not choose checks manually on the normal path. Repeated `--check <id>` is an
+advanced narrowing control only. Use the granular commands below to diagnose a
+red run, not as the default orchestration recipe.
 
 Blocking worklist item you have adjudicated? Clear it on the record:
 
@@ -49,15 +43,16 @@ receipts resolve --run-dir <d> --target <worklist-or-contradiction-id> --reason 
 - **Trust is typed, not a ladder.** Integrity, command outcome, applicability, and claim status are separate. Agent confidence is `reported_confidence` only.
 - **A passing label proves no semantic claim.** Use `receipts check`; a relevant subject, lock, environment, or check-version change automatically makes the result stale.
 - **Capture exit codes honestly.** Pipes swallow them (`cmd | tail` reports tail's exit). Conclude's own exit is the gate verdict — read it directly, never through a pipe.
-- **Done means gate green.** A run is not done because code changed or a lane said tests passed. It is done when `receipts conclude` exits 0 and the brief's worklist is clear.
+- **Done means prove green with bound facts.** A run is not done because code changed, checks merely executed, or a lane said tests passed. It is done when `receipts prove` exits 0, reports `bound_claims > 0`, and the brief's worklist is clear.
 
 ## All commands
 
 | Command | What it does |
 | --- | --- |
+| `receipts prove --run-dir d --report lane:agent:file --synthesis "…"` | safe default: init/resume + absorb + all checks + gate + report + brief |
 | `receipts init <dir>` | scaffold a run directory |
 | `receipts absorb --run-dir d --lane l --agent-id a --from f` | ingest + work receipt + recompile (one motion per lane) |
-| `receipts run --run-dir d --label test:x -- cmd…` | execute + mint a tamper-evident execution receipt |
+| `receipts run --run-dir d --label test:x -- cmd…` | low-level execution event only; never verifies a semantic claim |
 | `receipts check --run-dir d --id x` | execute a declared check and bind it to subject, environment, and target claims |
 | `receipts conclude --run-dir d --synthesis "…"` | recompile + gate + report + brief; exit = gate |
 | `receipts resolve --run-dir d --target id --reason "…"` | hash-chained adjudication clearing a blocking item |

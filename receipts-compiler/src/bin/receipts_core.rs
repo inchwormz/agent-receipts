@@ -4,6 +4,7 @@ use receipts_core::compiler::receipts::{
 use receipts_core::compiler::report::generate_report;
 use receipts_core::compiler::run_dir::compile_run_dir;
 use receipts_core::schema::ReceiptRecord;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -123,6 +124,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             let rest: Vec<String> = args.collect();
             check_with_binding(rest)
         }
+        "prove" => prove_pass(args.collect()),
         "ingest" => {
             let rest: Vec<String> = args.collect();
             let run_dir = PathBuf::from(
@@ -430,6 +432,11 @@ COMMANDS:
     check --run-dir <dir> --id <check-id>
                             Execute an engine-declared .receipts/checks.toml check
                             and bind it to exact subject, lock, environment, and claims
+    prove --run-dir <dir> [--repo-root <path>] --report <lane>:<agent-id>:<path>...
+          [--check <check-id>...] --synthesis <text>
+                            Initialize or resume, absorb attributed reports, run every
+                            declared check by default, conclude, report, and fail closed
+                            when a stage fails or zero claims are check-bound
     ingest --run-dir <dir> --lane <lane> --agent-id <id> --from <file>
                             Quarantine and normalize a natural-prose or JSONL lane result
     absorb --run-dir <dir> --lane <lane> --agent-id <id> --from <file> [--no-diff]
@@ -947,6 +954,204 @@ fn check_with_binding(args: Vec<String>) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
+#[derive(Debug)]
+struct ProveReport {
+    lane: String,
+    agent_id: String,
+    path: String,
+}
+
+fn parse_prove_report(spec: &str) -> Result<ProveReport, Box<dyn std::error::Error>> {
+    let mut parts = spec.splitn(3, ':');
+    let lane = parts.next().unwrap_or_default().trim();
+    let agent_id = parts.next().unwrap_or_default().trim();
+    let path = parts.next().unwrap_or_default().trim();
+    if lane.is_empty() || agent_id.is_empty() || path.is_empty() {
+        return Err(
+            "`--report` must be <lane>:<agent-id>:<path> (the path may contain colons)".into(),
+        );
+    }
+    Ok(ProveReport {
+        lane: lane.to_string(),
+        agent_id: agent_id.to_string(),
+        path: path.to_string(),
+    })
+}
+
+fn prove_pass(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    let run_dir = PathBuf::from(
+        parse_flag_value(&args, "--run-dir").ok_or("`prove` requires --run-dir <dir>")?,
+    );
+    let synthesis =
+        parse_flag_value(&args, "--synthesis").ok_or("`prove` requires --synthesis <text>")?;
+    let reports: Vec<ProveReport> = parse_flag_values(&args, "--report")
+        .iter()
+        .map(|spec| parse_prove_report(spec))
+        .collect::<Result<_, _>>()?;
+    if !run_dir.exists() && reports.is_empty() {
+        return Err("a new `prove` run requires at least one attributed --report".into());
+    }
+
+    let requested_repo_root = parse_flag_value(&args, "--repo-root").map(PathBuf::from);
+    let repo_root = if run_dir.exists() {
+        preflight_run_dir(&run_dir)?;
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(run_dir.join("manifest.json"))?)?;
+        let recorded = PathBuf::from(
+            manifest["repo_root"]
+                .as_str()
+                .ok_or("`prove` requires repo_root in manifest.json")?,
+        );
+        if let Some(requested) = requested_repo_root.as_ref() {
+            if requested.canonicalize()? != recorded.canonicalize()? {
+                return Err(format!(
+                    "`--repo-root {}` does not match this run's recorded repo_root {}",
+                    requested.display(),
+                    recorded.display()
+                )
+                .into());
+            }
+        }
+        recorded
+    } else {
+        requested_repo_root.unwrap_or(std::env::current_dir()?)
+    };
+
+    let check_manifest = receipts_core::compiler::checks::load_manifest(&repo_root)?
+        .ok_or("repo_root has no .receipts/checks.toml; `prove` refuses unverified work")?;
+    if check_manifest.checks.is_empty() {
+        return Err(
+            ".receipts/checks.toml declares zero checks; `prove` refuses a quiet success".into(),
+        );
+    }
+    let requested_checks = parse_flag_values(&args, "--check");
+    let check_ids: Vec<String> = if requested_checks.is_empty() {
+        check_manifest
+            .checks
+            .iter()
+            .map(|check| check.id.clone())
+            .collect()
+    } else {
+        let mut seen = BTreeSet::new();
+        requested_checks
+            .into_iter()
+            .filter(|id| seen.insert(id.clone()))
+            .collect()
+    };
+    for check_id in &check_ids {
+        receipts_core::compiler::checks::find_check(&check_manifest, check_id)?;
+    }
+
+    if !run_dir.exists() {
+        let init = run_self(&[
+            "init".to_string(),
+            run_dir.display().to_string(),
+            "--repo-root".to_string(),
+            repo_root.display().to_string(),
+        ])?;
+        if !init.status.success() {
+            return Err(format!(
+                "prove init failed: {}",
+                String::from_utf8_lossy(&init.stderr).trim()
+            )
+            .into());
+        }
+    }
+
+    for report in &reports {
+        let absorb = run_self(&[
+            "absorb".to_string(),
+            "--run-dir".to_string(),
+            run_dir.display().to_string(),
+            "--lane".to_string(),
+            report.lane.clone(),
+            "--agent-id".to_string(),
+            report.agent_id.clone(),
+            "--from".to_string(),
+            report.path.clone(),
+        ])?;
+        if !absorb.status.success() {
+            return Err(format!(
+                "prove absorb failed for lane `{}`: {}",
+                report.lane,
+                String::from_utf8_lossy(&absorb.stderr).trim()
+            )
+            .into());
+        }
+    }
+
+    let mut failed_checks = Vec::new();
+    for check_id in &check_ids {
+        let check = run_self(&[
+            "check".to_string(),
+            "--run-dir".to_string(),
+            run_dir.display().to_string(),
+            "--id".to_string(),
+            check_id.clone(),
+        ])?;
+        if !check.status.success() {
+            failed_checks.push(check_id.clone());
+        }
+    }
+
+    let conclude = run_self(&[
+        "conclude".to_string(),
+        "--run-dir".to_string(),
+        run_dir.display().to_string(),
+        "--synthesis".to_string(),
+        synthesis,
+        "--skip-report".to_string(),
+    ])?;
+    let report = run_self(&[
+        "report".to_string(),
+        "--run-dir".to_string(),
+        run_dir.display().to_string(),
+    ])?;
+    let packet: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        run_dir.join("state").join("next_pass_packet.json"),
+    )?)?;
+    let coverage = packet
+        .get("evidence_coverage")
+        .ok_or("compiled packet has no evidence_coverage")?;
+    let bound_claims = coverage
+        .get("verified_claims")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        + coverage
+            .get("verifier_backed_claims")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+    let ok = failed_checks.is_empty()
+        && conclude.status.success()
+        && report.status.success()
+        && bound_claims > 0;
+    println!(
+        "{}",
+        serde_json::json!({
+            "ok": ok,
+            "command": "prove",
+            "run_dir": run_dir,
+            "reports_absorbed": reports.len(),
+            "checks_run": check_ids.len(),
+            "failed_checks": failed_checks,
+            "gate_ok": conclude.status.success(),
+            "report_ok": report.status.success(),
+            "bound_claims": bound_claims,
+        })
+    );
+    print!("{}", String::from_utf8_lossy(&conclude.stdout));
+    if !conclude.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&conclude.stderr));
+    }
+    if !report.stderr.is_empty() {
+        eprint!("{}", String::from_utf8_lossy(&report.stderr));
+    }
+    if !ok {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 fn parse_run_invocation(
     args: Vec<String>,
 ) -> Result<(Vec<String>, Vec<String>), Box<dyn std::error::Error>> {
@@ -1405,7 +1610,7 @@ fn init_run_dir(dir: &Path, repo_root: &Path) -> Result<(), Box<dyn std::error::
     fs::write(dir.join("task.md"), task)?;
 
     let objective_md = format!(
-        "# Objective\n\n{}\n\n# Note\n\nThis run was scaffolded by `receipts init`. Ingest subagent output with `receipts ingest` or append evidence directly to worker-results/evidence.jsonl.\n",
+        "# Objective\n\n{}\n\n# Note\n\nThis run was scaffolded by `receipts init`. Prefer `receipts prove` to absorb attributed reports, run declared checks, gate, and report in one fail-closed command.\n",
         objective
     );
     fs::write(dir.join("raw/objective.md"), objective_md)?;
@@ -1426,15 +1631,10 @@ fn init_run_dir(dir: &Path, repo_root: &Path) -> Result<(), Box<dyn std::error::
 
     println!(
         "scaffolded run directory: {}\n\
-         next steps:\n\
-           1. append evidence records to {}/worker-results/evidence.jsonl\n\
-           2. append verifier records to {}/verifier-results/findings.jsonl\n\
-           3. run `receipts compile --run-dir {}`\n\
+         preferred next step:\n\
+           receipts prove --run-dir {} --report <lane>:<agent-id>:<path> --synthesis \"<summary>\"\n\
          \n\
-         for the full subagent ingest + strict gate flow, install the JS runtime:\n\
-           git clone https://github.com/inchwormz/agent-receipts && cd agent-receipts && npm run ready",
-        dir.display(),
-        dir.display(),
+         advanced debugging commands remain available: absorb, check, compile, conclude",
         dir.display(),
         dir.display()
     );

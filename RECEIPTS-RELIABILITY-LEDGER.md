@@ -1,6 +1,6 @@
 # Agent Receipts Reliability Ledger
 
-Last updated: 2026-07-14 (Pacific/Auckland)
+Last updated: 2026-07-15 (Pacific/Auckland)
 
 ## Goal
 
@@ -194,3 +194,17 @@ The highest-risk assumption is that current green tests measure the shipped path
 - **Verified publication:** Cargo reported `Published receipts-core v0.2.0 at registry crates-io`. The crates.io API returned version `0.2.0`, crate size `135312`, and checksum `8dc713d606ce895c5439647cb4bc970b11f093785fed596c7f0d8458cbe15022`.
 - **Verified public install:** a new isolated Cargo home downloaded `receipts-core v0.2.0` from the registry and installed the `receipts` binary. Its public binary reported the same exact source commit; `doctor` passed all available checks and readiness passed.
 - **Public crate:** `https://crates.io/crates/receipts-core`.
+### 2026-07-15 — One-command proof loop complete
+
+- **Goal:** collapse `init -> absorb -> check -> compile -> conclude` into a safe default `receipts prove` command.
+- **Progress number:** normal-path operator command decisions moved from `5+` to `1` (**done**).
+- **Root cause:** the product exposed safe gears but made the orchestrator decide which gears and checks to run. The live baseline proved the risk: raw `receipts run` created execution events but 0 attested facts; the first correct manifest-bound Node check then failed 91/93 because default file concurrency oversubscribed nested engine subprocesses. Both failed files and a six-way fresh-target identity stress passed independently, refuting a shared-publication race and localizing the measuring defect to whole-suite oversubscription.
+- **Implemented:** `receipts prove` initializes or resumes, absorbs repeatable attributed reports, runs every repo-declared check by default, concludes, renders HTML, prints a machine summary plus Prime brief, and exits nonzero for ingest/check/gate/report failure or `bound_claims: 0`. Repeated `--check` remains an explicit advanced narrowing control.
+- **False-green controls:** Node and Rust manifests now run serial/current primary checks plus deliberate negative controls. The brief and HTML report consume typed `expected_failure` outcomes instead of misreporting intentional exit `1` as a broken check. Standalone `init` now teaches `prove`, not manual JSONL editing.
+- **Focused contract:** six `prove` tests pass (happy path, failed-check preservation, malformed attribution, zero-bound-claim refusal, missing manifest, report-render refusal). The expected-negative brief regression and init contract also pass.
+- **Final Node receipt:** `check-attempt-0003`, subject `b088a60097ad7aa5fe1e706eab7606690533f974f22944deeb10ba0149bbb105`, `99/99` passed, primary `rcpt-0004`, negative control `rcpt-0005: expected_failure`, duration `216603ms`. Run: `C:\Users\johnr\Documents\Codex\2026-07-15\pl\outputs\agent-receipts-prove-implementation-20260715-151346`.
+- **Final live `prove` canary:** `ok:true`, `report_ok:true`, `bound_claims:1`, gate passed; `rust-suite` attempt `check-attempt-0005`, subject `22a95f9e77840672fa543a1787eb786315c9d758c0303188148204be200d844d`, `69` Rust tests passed, primary `rcpt-0010`, negative control `rcpt-0011: expected_failure`. Run: `C:\Users\johnr\Documents\Codex\2026-07-15\pl\outputs\agent-receipts-prove-canary-20260715-154327`.
+- **Browser proof:** `http://127.0.0.1:8778/state/report.html` rendered `GATE PASSED`, 100% Evidence Coverage, 1 verified fact, and typed `expected_failure` rows. The plan rendered at `http://127.0.0.1:8777/2026-07-15-receipts-prove-command.html`.
+- **Remaining product gaps:** checks are still opaque while running (the final Node check was silent for 216.6s), claim IDs harvested from reports must still align with manifest `target_claims`, and auto-created run objectives retain placeholder copy unless the caller edits task metadata.
+- **Git:** changes remain uncommitted on `main`; no commit, push, publication, or deploy was requested.
+- **Plan:** `docs/superpowers/plans/2026-07-15-receipts-prove-command.md` and `.html`.

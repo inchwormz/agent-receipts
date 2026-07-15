@@ -1,11 +1,10 @@
-// M1/M2 acceptance: execution receipts and the attestation ladder.
+// M1/M2 acceptance: typed execution receipts and declared-check attestation.
 //
 // The product promise under test: valuable receipts WITHOUT agent
-// cooperation. The orchestrator runs commands through `receipts run`; the
-// journal is hash-chained; compile turns receipts into attested facts,
-// upgrades agent claims whose cited labels actually passed, and mechanically
-// REFUTES passed claims whose cited labels actually failed. Agents cannot
-// mint, fake, or edit receipts.
+// cooperation. Raw `receipts run` events never promote semantic claims;
+// repo-declared checks bind outcomes to exact subjects and target claims.
+// The journal is hash-chained, failed checks refute matching success claims,
+// and agents cannot mint, fake, or edit receipts.
 import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -347,6 +346,13 @@ test("negative controls are expected failures only for the declared signature", 
   const controlEvent = packet.receipt_events.find((event) => event.label === "check:negative-control:negative-control");
   assert.equal(controlEvent.outcome, "expected_failure");
   assert.ok(packet.trusted_facts.some((fact) => fact.id === "fact:ev-negative-control"));
+  const expectedBrief = coreCommand(["next", "--run-dir", runDir]);
+  assert.equal(expectedBrief.status, 0, expectedBrief.stderr);
+  assert.equal(
+    expectedBrief.stdout.includes("FAILED CHECKS"),
+    false,
+    `an expected negative-control failure must not contradict a green check in the brief: ${expectedBrief.stdout}`,
+  );
 
   writeCheck("A_DIFFERENT_FAILURE", "1");
   assert.equal(coreCommand(["compile", "--run-dir", runDir]).status, 0);

@@ -35,6 +35,15 @@ fn init_scaffolds_a_finishable_run() {
         "init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("receipts prove"),
+        "init must point operators to the one safe command: {stdout}"
+    );
+    assert!(
+        !stdout.contains("append evidence records") && !stdout.contains("install the JS runtime"),
+        "init must not teach the obsolete manual chain: {stdout}"
+    );
 
     let manifest: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.join("manifest.json")).expect("manifest"))

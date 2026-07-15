@@ -11,7 +11,7 @@
 use crate::compiler::receipts::load_verified_receipts;
 use crate::schema::{Contradiction, EvidenceRecord, NextPassPacket, ReceiptRecord};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -415,28 +415,44 @@ fn render_work_scope(packet: &NextPassPacket) -> String {
     out
 }
 
-fn render_receipts_table(receipts: &[ReceiptRecord]) -> String {
+fn render_receipts_table(packet: &NextPassPacket, receipts: &[ReceiptRecord]) -> String {
     let mut out = String::from("<section class=\"receipts\">\n<h2>Receipts</h2>\n");
     if receipts.is_empty() {
         out.push_str("<p class=\"empty\">No execution receipts recorded.</p>\n</section>\n");
         return out;
     }
     out.push_str(
-        "<table>\n<thead><tr><th>id</th><th>label</th><th>command</th><th>exit</th><th>duration_ms</th><th>output</th></tr></thead>\n<tbody>\n",
+        "<table>\n<thead><tr><th>id</th><th>label</th><th>command</th><th>outcome</th><th>exit</th><th>duration_ms</th><th>output</th></tr></thead>\n<tbody>\n",
     );
+    let outcome_by_receipt: BTreeMap<&str, &str> = packet
+        .receipt_events
+        .iter()
+        .map(|event| (event.receipt_id.as_str(), event.outcome.as_str()))
+        .collect();
     for r in receipts {
         let label = r.label.as_deref().unwrap_or("-");
-        let exit_class = if r.exit_code == 0 {
-            "exit-ok"
-        } else {
-            "exit-fail"
+        let outcome = outcome_by_receipt
+            .get(r.id.as_str())
+            .copied()
+            .unwrap_or(if r.exit_code == 0 { "passed" } else { "failed" });
+        let exit_class = match outcome {
+            "passed" => "exit-ok",
+            "expected_failure" => "exit-expected",
+            _ => "exit-fail",
+        };
+        let outcome_class = match outcome {
+            "passed" => "status-pass",
+            "failed" => "status-fail",
+            _ => "status-other",
         };
         let cmd = r.cmd.join(" ");
         out.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td><code>{}</code></td><td class=\"{}\">{}</td><td>{}</td><td><a href=\"../receipts/artifacts/{}.txt\">stdout</a> / <a href=\"../receipts/artifacts/{}.txt\">stderr</a></td></tr>\n",
+            "<tr><td>{}</td><td>{}</td><td><code>{}</code></td><td class=\"{}\">{}</td><td class=\"{}\">{}</td><td>{}</td><td><a href=\"../receipts/artifacts/{}.txt\">stdout</a> / <a href=\"../receipts/artifacts/{}.txt\">stderr</a></td></tr>\n",
             html_escape(&r.id),
             html_escape(label),
             html_escape(&cmd),
+            outcome_class,
+            html_escape(outcome),
             exit_class,
             r.exit_code,
             r.duration_ms,
@@ -601,6 +617,7 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #e2e
 tbody tr:nth-child(even) { background: #f0f0f1; }
 .exit-ok { color: #1c6b2c; font-weight: 600; }
 .exit-fail { color: #a12622; font-weight: 700; background: #fbeceb; }
+.exit-expected { color: #8a5b00; font-weight: 600; background: #fdf3e0; }
 .worklist li.blocking { border-left: 3px solid #a12622; padding-left: 8px; }
 .worklist li.advisory { border-left: 3px solid #b8b8b8; padding-left: 8px; }
 .worklist li.resolved { opacity: 0.55; text-decoration: line-through; }
@@ -656,7 +673,7 @@ pub fn render_report(
     html.push_str(&render_refutations(packet));
     html.push_str(&render_worklist(packet));
     html.push_str(&render_work_scope(packet));
-    html.push_str(&render_receipts_table(receipts));
+    html.push_str(&render_receipts_table(packet, receipts));
     html.push_str(&render_trusted_facts(packet));
     html.push_str(&render_lane_digests(packet));
     html.push_str(&render_evidence_by_lane(packet));
@@ -916,6 +933,35 @@ mod tests {
             "label must render: {html}"
         );
         assert!(html.contains(">0<"), "exit code 0 must render: {html}");
+    }
+
+    #[test]
+    fn receipt_row_labels_expected_negative_control_instead_of_styling_it_failed() {
+        let mut packet = empty_packet();
+        packet.receipt_events.push(crate::schema::ReceiptEvent {
+            receipt_id: "rcpt-0002".to_string(),
+            label: Some("check:node:negative-control".to_string()),
+            integrity: "signed".to_string(),
+            outcome: "expected_failure".to_string(),
+            exit_code: 9,
+            attempts_for_label: 1,
+        });
+        let r = receipt("rcpt-0002", Some("check:node:negative-control"), 9);
+
+        let html = render_report(&packet, &[r], None);
+
+        assert!(
+            html.contains("expected_failure"),
+            "typed outcome must render: {html}"
+        );
+        assert!(
+            html.contains("exit-expected"),
+            "expected failure needs non-red styling: {html}"
+        );
+        assert!(
+            !html.contains("class=\"exit-fail\">9"),
+            "expected failure must not look like a broken check: {html}"
+        );
     }
 
     #[test]

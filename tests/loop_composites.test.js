@@ -7,6 +7,7 @@ import { strict as assert } from "node:assert";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -103,6 +104,63 @@ function absorb(runDir, lane, agentId, laneFile, extraArgs = []) {
 
 function conclude(runDir, synthesis, extraArgs = [], options = {}) {
   return runNode(["bin/receipts.mjs", "conclude", "--run-dir", runDir, "--synthesis", synthesis, ...extraArgs], options);
+}
+
+function writeProveFixture(name, outcomes, { reportClaimId = "claim:fixture", targetClaimId = "claim:fixture" } = {}) {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), `agent-receipts-prove-${name}-`));
+  const checksDir = path.join(fixture, ".receipts");
+  fs.mkdirSync(checksDir, { recursive: true });
+  fs.writeFileSync(path.join(fixture, "subject.txt"), "fixture subject\n", "utf8");
+  const checks = outcomes.map((outcome, index) => [
+    "[[checks]]",
+    `id = "fixture-${index + 1}"`,
+    'version = "1"',
+    `command = ["node", "-e", "process.exit(${outcome === "pass" ? 0 : 7})"]`,
+    'covered_paths = ["subject.txt"]',
+    'eligible_claim_kinds = ["observation"]',
+    'environment_class = "test-fixture"',
+    `target_claims = ["${targetClaimId}"]`,
+    "",
+  ].join("\n"));
+  fs.writeFileSync(
+    path.join(checksDir, "checks.toml"),
+    `manifest_version = 1\n\n${checks.join("\n")}`,
+    "utf8",
+  );
+  const report = path.join(fixture, "lane-report.md");
+  fs.writeFileSync(
+    report,
+    [
+      "```receipts-evidence-jsonl",
+      JSON.stringify({
+        id: reportClaimId,
+        kind: "observation",
+        summary: "The fixture subject exists",
+        source_ids: ["file:subject.txt:1"],
+        observed_at: now(),
+      }),
+      "```",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  return { fixture, report, runDir: path.join(fixture, "run") };
+}
+
+function prove({ runDir, repoRoot: fixtureRoot, reports = [], checks = [], synthesis = "prove fixture synthesis" }, options = {}) {
+  const args = [
+    "bin/receipts.mjs",
+    "prove",
+    "--run-dir",
+    runDir,
+    "--repo-root",
+    fixtureRoot,
+    "--synthesis",
+    synthesis,
+  ];
+  for (const report of reports) args.push("--report", report);
+  for (const check of checks) args.push("--check", check);
+  return runNode(args, options);
 }
 
 const now = () => new Date().toISOString();
@@ -256,4 +314,109 @@ test("conclude on a run with an unresolved blocker: exit nonzero, gate-report.js
   assert.equal(gateReport.ok, false, `gate report must parse with ok:false; got ${JSON.stringify(gateReport)}`);
 
   assert.ok(result.stdout.includes("RECEIPTS BRIEF"), `brief must print even when red; got ${result.stdout}`);
+});
+
+test("prove happy path: one command initializes, absorbs attributed reports, runs every declared check, concludes, and reports", (t) => {
+  const { fixture, report, runDir } = writeProveFixture("green", ["pass", "pass"]);
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+
+  const result = prove({
+    runDir,
+    repoRoot: fixture,
+    reports: [`research:agent-one:${report}`],
+  }, { env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" } });
+
+  assert.equal(result.status, 0, `prove must succeed: stdout=${result.stdout}\nstderr=${result.stderr}`);
+  const firstLine = result.stdout.trim().split(/\r?\n/)[0];
+  const summary = JSON.parse(firstLine);
+  assert.deepEqual(
+    { ok: summary.ok, command: summary.command, reports_absorbed: summary.reports_absorbed, checks_run: summary.checks_run },
+    { ok: true, command: "prove", reports_absorbed: 1, checks_run: 2 },
+  );
+  assert.ok(result.stdout.includes("RECEIPTS BRIEF"), "prove must finish with the existing human brief");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, "manifest.json"), "utf8")).repo_root, fixture);
+  assert.equal(readJsonl(path.join(runDir, "checks", "attempts.jsonl")).length, 2, "all declared checks run by default");
+  const packet = JSON.parse(fs.readFileSync(path.join(runDir, "state", "next_pass_packet.json"), "utf8"));
+  assert.equal(packet.evidence_coverage.verified_claims, 1, "the green command must bind at least one report claim to a check");
+  assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, "state", "gate-report.json"), "utf8")).ok, true);
+  assert.ok(fs.existsSync(path.join(runDir, "state", "report.html")), "prove must render the HTML report");
+});
+
+test("prove failed check: returns nonzero after preserving every check attempt and final report", (t) => {
+  const { fixture, report, runDir } = writeProveFixture("red", ["fail", "pass"]);
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+
+  const result = prove({
+    runDir,
+    repoRoot: fixture,
+    reports: [`research:agent-one:${report}`],
+  }, { env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" } });
+
+  assert.notEqual(result.status, 0, "a failed declared check must make prove fail closed");
+  const attempts = readJsonl(path.join(runDir, "checks", "attempts.jsonl"));
+  assert.deepEqual(attempts.map((attempt) => attempt.outcome), ["failed", "passed"], "prove must not lose later checks after the first red");
+  assert.ok(fs.existsSync(path.join(runDir, "state", "gate-report.json")), "the gate still runs after a failed check");
+  assert.ok(fs.existsSync(path.join(runDir, "state", "report.html")), "the human report still renders after a failed check");
+});
+
+test("prove rejects malformed report attribution before initializing a run", (t) => {
+  const { fixture, report, runDir } = writeProveFixture("bad-report", ["pass"]);
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+
+  const result = prove({ runDir, repoRoot: fixture, reports: [report] });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--report.*lane.*agent.*path/i);
+  assert.equal(fs.existsSync(runDir), false, "invalid attribution must fail before creating run state");
+});
+
+test("prove refuses a false green when checks pass but zero report claims are bound", (t) => {
+  const { fixture, report, runDir } = writeProveFixture(
+    "unbound",
+    ["pass"],
+    { reportClaimId: "claim:not-covered", targetClaimId: "claim:fixture" },
+  );
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+
+  const result = prove({
+    runDir,
+    repoRoot: fixture,
+    reports: [`research:agent-one:${report}`],
+  }, { env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" } });
+
+  assert.notEqual(result.status, 0, "a passing command with zero bound facts must fail closed");
+  assert.match(result.stdout, /"bound_claims":0/);
+  assert.ok(fs.existsSync(path.join(runDir, "state", "report.html")), "the diagnostic report must still be available");
+});
+
+test("prove fails closed when the repository has no check manifest", (t) => {
+  const { fixture, report, runDir } = writeProveFixture("no-manifest", ["pass"]);
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  fs.rmSync(path.join(fixture, ".receipts", "checks.toml"));
+
+  const result = prove({
+    runDir,
+    repoRoot: fixture,
+    reports: [`research:agent-one:${report}`],
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no \.receipts[\\/]checks\.toml/i);
+});
+
+test("prove fails closed when the final HTML report cannot be rendered", (t) => {
+  const { fixture, report, runDir } = writeProveFixture("report-failure", ["pass"]);
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const initialized = runNode(["bin/receipts.mjs", "init", runDir, "--repo-root", fixture]);
+  assert.equal(initialized.status, 0, initialized.stderr);
+  fs.mkdirSync(path.join(runDir, "state", "report.html"), { recursive: true });
+
+  const result = prove({
+    runDir,
+    repoRoot: fixture,
+    reports: [`research:agent-one:${report}`],
+  }, { env: { ...process.env, RECEIPTS_MIN_AGENT_COVERAGE: "1" } });
+
+  assert.notEqual(result.status, 0, "prove must not pass when its human report failed to render");
+  assert.match(result.stdout, /"report_ok":false/);
 });

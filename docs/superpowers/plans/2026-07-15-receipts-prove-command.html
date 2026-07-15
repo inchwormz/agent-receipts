@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Receipts Prove Command Plan</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0b1020; color: #e8edf7; }
+    body { max-width: 980px; margin: 0 auto; padding: 48px 24px 80px; line-height: 1.55; }
+    h1 { font-size: clamp(2rem, 6vw, 4rem); line-height: 1; margin-bottom: 16px; }
+    h2 { margin-top: 40px; color: #8ad7ff; }
+    .lede, .metric { border: 1px solid #304263; border-radius: 16px; padding: 20px; background: #111a2f; }
+    .metric { margin-top: 18px; border-color: #3c8f6a; }
+    code { background: #202b45; padding: 2px 6px; border-radius: 6px; }
+    ol { padding-left: 24px; }
+    .flow { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 28px 0; }
+    .flow div { padding: 14px 10px; text-align: center; border-radius: 10px; background: #192642; border: 1px solid #38517d; }
+    .flow div + div::before { content: "→ "; color: #8ad7ff; }
+    @media (max-width: 760px) { .flow { grid-template-columns: 1fr; } .flow div + div::before { content: "↓ "; } }
+  </style>
+</head>
+<body>
+  <h1>One command should own the proof loop.</h1>
+  <div class="lede"><strong>Goal:</strong> introduce <code>receipts prove</code> as the safe default. It initializes or resumes, absorbs explicitly attributed reports, runs repo-declared checks, compiles, gates, reports, and fails closed.</div>
+  <div class="flow" aria-label="prove command stages">
+    <div>Initialize</div><div>Absorb</div><div>Check all</div><div>Gate</div><div>Report</div>
+  </div>
+  <div class="metric"><strong>Done condition:</strong> at least five operator decisions become one command, with a deliberate red witness, fresh green Node and Rust checks, and a real signed check attempt from the final command.</div>
+  <h2>1. Repair the live signal</h2>
+  <ol><li>Preserve the current 91/93 failed check receipt.</li><li>Falsify an engine-publication race with isolated and six-way launch witnesses.</li><li>Serialize the oversubscribed official Node check.</li><li>Add a Node test-runner negative control and re-run the bound check.</li></ol>
+  <h2>2. Specify the safe path red-first</h2>
+  <ol><li>Prove one command handles init, reports, all declared checks, gate, and report.</li><li>Prove a failed check returns nonzero without losing its artifacts.</li><li>Prove missing manifests and malformed report attribution fail closed.</li><li>Reject a false green when zero report claims are bound to checks.</li></ol>
+  <h2>3. Implement in the Rust authority</h2>
+  <ol><li>Add repeatable <code>--report lane:agent:path</code> and optional <code>--check id</code>.</li><li>Default to every declared check.</li><li>Reuse existing absorb/check/conclude mechanisms.</li><li>Emit a compact stage summary and preserve the human brief.</li></ol>
+  <h2>4. Make it obvious and verify</h2>
+  <ol><li>Put <code>prove</code> first in README and skill guidance.</li><li>Label <code>run</code> as execution evidence, not fact attestation.</li><li>Run focused tests, the manifest-bound Node check, an isolated Rust suite, and a live canary.</li></ol>
+</body>
+</html>

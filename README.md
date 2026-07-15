@@ -48,23 +48,24 @@ Agent Receipts is the mechanism. The engine records command execution as **hash-
 ## Sixty seconds, end to end
 
 ```bash
-# One run directory per task
-receipts init .receipts/runs/fix-login
-
-# Your agents work however they work. When a lane reports, absorb its
-# report file VERBATIM - any format, even a wall of prose:
-receipts absorb --run-dir .receipts/runs/fix-login \
-  --lane backend --agent-id sonnet-1 --from lane-report.md
-
-# Run the engine-owned, subject-bound check:
-receipts check --run-dir .receipts/runs/fix-login --id login-suite
-
-# Close the pass. Exit code 0 = the gate is green.
-receipts conclude --run-dir .receipts/runs/fix-login \
+# One command initializes, absorbs every attributed report, runs every
+# repo-declared check by default, gates, writes the report, and prints the brief.
+receipts prove --run-dir .receipts/runs/fix-login \
+  --report backend:sonnet-1:lane-report.md \
   --synthesis "login fix verified against the real suite"
 ```
 
-`conclude` prints a compressed brief: what is proven, what is claimed, what is refuted, and exactly what needs your judgment. That brief is what you read. Not the transcripts.
+Repeat `--report <lane>:<agent-id>:<path>` for every lane. `prove` runs all
+checks unless an advanced operator explicitly narrows them with repeated
+`--check <id>`. It returns nonzero if ingest, any check, or the gate fails—and
+also when the gate is superficially green but zero report claims are actually
+bound to checks. It prints a compressed brief: what is proven, what is claimed,
+what is refuted, and exactly what needs your judgment.
+
+The manifest's `target_claims` must match claim IDs produced by ingest. If they
+do not, `prove` fails with `bound_claims: 0` instead of letting check execution
+masquerade as verified facts. The granular `init`, `absorb`, `check`, and
+`conclude` commands remain available for debugging and advanced workflows.
 
 Checks are tokenized—no shell string—and declare what they cover and which claims they may verify:
 
@@ -92,8 +93,8 @@ flowchart LR
     end
 
     subgraph engine["Agent Receipts engine"]
-        ING["absorb<br/><i>forgiving ingest +<br/>work receipt</i>"]
-        RUN["receipts check<br/><i>binds result to subject,<br/>lock, environment + claim</i>"]
+        ING["prove: absorb<br/><i>forgiving ingest +<br/>work receipt</i>"]
+        RUN["prove: check all<br/><i>binds results to subject,<br/>lock, environment + claims</i>"]
         COMP["compile<br/><i>deterministic packet,<br/>every claim sourced</i>"]
         GATE["gate<br/><i>fail-closed verdict</i>"]
     end
@@ -234,10 +235,9 @@ sequenceDiagram
     participant Prime as Prime (orchestrator)
     participant Engine as Receipts engine
     Lane->>Prime: Refactor done. cargo test all green.
-    Prime->>Engine: receipts absorb (lane report, verbatim)
-    Prime->>Engine: receipts check --id cargo-suite
+    Prime->>Engine: receipts prove (attributed report + synthesis)
     Engine-->>Prime: bound check attempt exits 1
-    Prime->>Engine: receipts conclude
+    Engine-->>Prime: final report + nonzero exit
     Engine-->>Prime: GATE RED, claim refuted by rcpt-0007
 ```
 
@@ -342,7 +342,7 @@ A trust tool that hides its own gaps is broken at the root, so here are ours, in
 
 ## FAQ
 
-**Does this slow my agents down?** No. Agents receive nothing and change nothing. The cost lives with the orchestrator: one `absorb` per lane report, one declared `check` per verification you already wanted, one `conclude` per pass.
+**Does this slow my agents down?** No. Agents receive nothing and change nothing. The cost lives with the orchestrator, which makes one `prove` call per pass; the engine absorbs the reports, runs the declared checks, and concludes.
 
 **What if my agent writes garbage?** Garbage ingests fine. Prose is harvested, JSON is repaired, and the truly unstructurable becomes a single quarantined record that can never be mistaken for evidence.
 

@@ -4,14 +4,15 @@ This is the internals tour. If you haven't read the [README](../README.md), star
 
 ## Architecture
 
-Two artifacts, installed once, driven by one command.
+Two artifacts, installed once, with one safe orchestration command.
 
 ```mermaid
 flowchart TB
     subgraph cli["receipts (Node CLI - the one command you type)"]
         direction LR
-        ABS["absorb"]
-        CON["conclude"]
+        PRV["prove"]
+        ABS["absorb (advanced)"]
+        CON["conclude (advanced)"]
         ING["ingest"]
         GAT["gate"]
         RDY["ready"]
@@ -26,7 +27,7 @@ flowchart TB
         REP["report"]
         NXT["next"]
     end
-    cli -->|"delegates run/init/diff/resolve/next/compile/report"| core
+    cli -->|"prove chains init/absorb/check/conclude/report"| core
     core --> RD[("run directory<br/>.receipts/runs/&lt;task&gt;/")]
     cli --> RD
 ```
@@ -53,7 +54,8 @@ Everything lives in the run directory. There is no daemon, no database, no netwo
 
 ## Execution receipts
 
-`receipts run --run-dir <d> --label test:suite -- npm test` does four things:
+`receipts run --run-dir <d> --label test:suite -- npm test` is a low-level
+execution recorder. It does four things:
 
 1. Records repo tree state (git HEAD + dirty file hash) before and after.
 2. Executes the command exactly as given, streaming stdout/stderr to content-addressed artifact files (`artifacts/<fnv1a-64>.txt`).
@@ -73,14 +75,20 @@ Each record's `record_hash` covers the serialized record minus itself; each reco
 
 **Work receipts** (`receipts diff`, minted automatically by `absorb`) carry the reserved label `work:tree` and record what changed on disk: numstat summary, mechanical windows between receipt ids. They attest tree state and are deliberately invisible to claim attestation. A lane cannot earn trust by diffing.
 
+Its passing exit code proves only that this exact command execution returned
+zero. It never promotes a semantic claim. Use a repo-declared `receipts check`,
+or the default `receipts prove` chain, for subject- and claim-bound proof.
+
 ## Attestation and refutation
 
-At compile time, for each label the **latest** receipt wins (rerunning a fixed suite supersedes the failure honestly).
+At compile time, the engine verifies check attempts against their signed
+receipts and current manifest definition.
 
-- A passing receipt becomes an **attested** fact on its own, no agent cooperation needed.
-- An agent claim citing a receipt id or a passing label is **upgraded**: its provenance now includes the receipt.
-- An agent claim of success citing a label whose latest receipt **failed** produces a `con:receipt:*` contradiction. The gate treats these as red, always. This is the mechanical lie-catcher.
-- Claims citing labels with no receipt stay **asserted**, and the worklist suggests the exact `receipts run` invocation that would settle them.
+- A current passing declared check can attest only its exact `target_claims` and eligible claim kinds.
+- A failed declared check refutes a matching success claim and turns the safe path red.
+- Subject, dependency lock, environment, command, or check-definition drift makes an old pass stale.
+- Raw `run` labels and fabricated receipt references remain execution events; they cannot promote semantic claims.
+- Claims without a current check binding stay **asserted**. `prove` additionally refuses exit 0 when the total bound claim count is zero.
 
 ## Forgiving ingest: the repair ladder
 
@@ -102,7 +110,7 @@ The compiler is the single author of the worklist. Items are typed and either bl
 | `adjudicate` | receipt refutations, contradictions | refutations always; others by severity |
 | `unblock` | a lane wrote `BLOCKED <reason>` | yes |
 | `resolve-finding` | a verifier finding didn't pass | yes |
-| `verify-claim` | load-bearing asserted claim, no proof | advisory, with a suggested `receipts run` |
+| `verify-claim` | load-bearing asserted claim, no proof | advisory, requiring a declared check binding |
 | `re-task-or-accept` | a lane produced only unstructured output | advisory |
 
 Blocking items are cleared only by `receipts resolve`, which appends to a second hash-chained journal (`decisions/resolutions.jsonl`). Judgment calls are allowed; invisible judgment calls are not. The deadlock circuit (blocked lane, red gate, resolve, green gate) is a test, not a promise: [worklist_resolutions.test.js](../tests/worklist_resolutions.test.js).
@@ -116,7 +124,10 @@ Two different problems, two different severities:
 
 ## The gate
 
-`receipts conclude` (or `receipts gate`) is fail-closed: it exits nonzero unless every rule passes. The rules, in plain terms:
+`receipts prove` is the safe default: it chains ingest, all declared checks,
+conclusion, and reporting, and additionally requires at least one bound claim.
+The granular `receipts conclude` (or `receipts gate`) remains fail-closed on the
+categorical gate rules below:
 
 1. Inputs are fresh (the packet fingerprint matches the raw/receipts/decisions files on disk).
 2. Schema versions are known; unknown versions fail, they don't warn.

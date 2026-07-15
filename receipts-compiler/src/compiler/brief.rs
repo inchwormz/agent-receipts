@@ -180,9 +180,18 @@ pub fn generate_brief(run_dir: &Path, as_json: bool) -> Result<String, Box<dyn s
                 }
             }
         }
+        let typed_outcome_by_receipt: std::collections::BTreeMap<&str, &str> = packet
+            .receipt_events
+            .iter()
+            .map(|event| (event.receipt_id.as_str(), event.outcome.as_str()))
+            .collect();
         let failing: Vec<_> = latest_by_label
             .values()
-            .filter(|receipt| receipt.exit_code != 0)
+            .filter(|receipt| {
+                receipt.exit_code != 0
+                    && typed_outcome_by_receipt.get(receipt.id.as_str()).copied()
+                        != Some("expected_failure")
+            })
             .collect();
         if !failing.is_empty() {
             out.push_str(&format!(

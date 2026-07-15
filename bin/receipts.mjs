@@ -16,6 +16,7 @@ const COMMANDS = [
   "init",
   "run",
   "check",
+  "prove",
   "ingest",
   "absorb",
   "conclude",

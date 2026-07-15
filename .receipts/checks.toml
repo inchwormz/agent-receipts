@@ -2,11 +2,12 @@ manifest_version = 1
 
 [[checks]]
 id = "rust-suite"
-version = "1"
+version = "2"
 command = ["cargo", "test", "--locked", "--manifest-path", "receipts-compiler/Cargo.toml"]
 covered_paths = [
   "receipts-compiler/src/**/*.rs",
   "receipts-compiler/tests/**/*.rs",
+  "receipts-compiler/examples/negative_control.rs",
   "receipts-compiler/schemas/*.json",
   "receipts-compiler/Cargo.toml",
   "receipts-compiler/Cargo.lock",
@@ -14,18 +15,23 @@ covered_paths = [
 eligible_claim_kinds = ["code-change", "test-change", "root-cause"]
 environment_class = "local-rust"
 target_claims = ["claim:rust-suite"]
+negative_control_command = ["cargo", "run", "--quiet", "--locked", "--manifest-path", "receipts-compiler/Cargo.toml", "--example", "negative_control"]
+negative_control_expected_signature = "RECEIPTS_RUST_NEGATIVE_CONTROL"
 
 [[checks]]
 id = "node-suite"
-version = "1"
-command = ["node", "--test"]
+version = "2"
+command = ["node", "--test", "--test-concurrency=1"]
 covered_paths = [
   "bin/**/*.mjs",
   "scripts/**/*.mjs",
   "tests/**/*.js",
+  "tests/fixtures/node-test-negative-control.mjs",
   "driver.mjs",
   "package.json",
 ]
 eligible_claim_kinds = ["code-change", "test-change", "root-cause"]
 environment_class = "local-node"
 target_claims = ["claim:node-suite"]
+negative_control_command = ["node", "--test", "tests/fixtures/node-test-negative-control.mjs"]
+negative_control_expected_signature = "RECEIPTS_NEGATIVE_CONTROL"
